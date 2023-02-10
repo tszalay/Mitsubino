@@ -1,0 +1,3 @@
+[submodule "HeatPump"]
+	path = HeatPump
+	url = https://github.com/SwiCago/HeatPump.git
