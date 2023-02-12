@@ -18,10 +18,14 @@ WiFiClient wifi_client;
 PubSubClient mqtt_client(wifi_client);
 HeatPump heat_pump;
 
+// global where we are storing the debug log
+String DEBUG_LOG_BUFFER;
+const size_t DEBUG_LOG_BUFFER_SIZE = 1024;
+
 // whether we are plugged into USB or the heat pump.
 // this is compile-time const because if we reconnect to the USB serial
 // we may as well re-flash, ESP8266 only has one real serial port.
-static const bool USE_HEATPUMP = true;
+static const bool USE_HEATPUMP = false;
 
 const char* heatpump_topic = "heatpump_topic/foo";
 const char* heatpump_status_topic = "heatpump_topic/status";
@@ -32,7 +36,6 @@ const char* heatpump_debug_set_topic = "heatpump_topic/debug_set";
 bool _debugMode = false;
 int SEND_ROOM_TEMP_INTERVAL_MS = 15000;
 int lastTempSend = 0;
-
 
 // ------------- persistent data save/restore helpers -------------
 
@@ -99,31 +102,29 @@ void print_persistent_data(PersistentData& data) {
 
 // ------------- abstracted debug print helpers -------------
 
+void clear_debug_log() {
+  DEBUG_LOG_BUFFER.remove(0, DEBUG_LOG_BUFFER.length());
+}
+
 template<typename T>
-void _debug_print_impl(String& s, const T& t) {
-  if (USE_HEATPUMP)
-    s.concat(t);
-  else
+void _debug_print_impl(const T& t) {
+  String s(t);
+  if (s.length() + DEBUG_LOG_BUFFER.length() >= (DEBUG_LOG_BUFFER_SIZE-1))
+    clear_debug_log();
+  DEBUG_LOG_BUFFER.concat(s);
+  if (!USE_HEATPUMP)
     Serial.print(t);
 }
  
 template<typename T, typename... U>
-void _debug_print_impl(String& s, const T& t, const U&... u) {
-  _debug_print_impl(s, t);
-  _debug_print_impl(s, u...);
+void _debug_print_impl(const T& t, const U&... u) {
+  _debug_print_impl(t);
+  _debug_print_impl(u...);
 }
 
 template<typename... T>
 void debug_print(const T&... t) {
-  String s;
-  if (USE_HEATPUMP)
-    s.reserve(256); // long enough for most debug messages
-  _debug_print_impl(s, t...);
-  if (USE_HEATPUMP) {
-    Serial.println("mock using heatpump, message:");
-    Serial.println(s);
-  }
-  // else: already printed using serial.print above
+  _debug_print_impl(t...);
 }
 
 template<typename... T>
@@ -133,6 +134,41 @@ void debug_println(const T&... t) {
 
 
 // ------------- HTTP server pages -------------
+
+/* Root page */
+const char ROOT_PAGE_BODY[] PROGMEM = R"=====(
+<!DOCTYPE html><html><body><p>
+ESP8266 Mitsubino Server:<br>
+<a href="config">Configuration</a><br>
+<a href="log">View log</a><br>
+<a href="restart">Restart</a><br>
+<a href="blink">Blink LED</a>
+</p></body></html>
+)=====";
+
+/* Auto-refreshing webpage that fetches latest debug log every 2s */
+const char LOG_PAGE_BODY[] PROGMEM = R"=====(
+<!DOCTYPE html><html>
+<div style="white-space: pre-line"><p>
+ESP8266 debug log:<br>
+<span id="log_text"><br></span>
+</p></div>
+<script>
+setInterval(getData, 2000); 
+function getData() {
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      document.getElementById("log_text").innerHTML += this.responseText;
+    }
+  };
+  xhttp.open("GET", "get_log", true);
+  xhttp.send();
+}
+</script>
+</body></html>
+)=====";
+
 
 // Shows webpage that displays forms to submit
 void handle_persistent_forms() {
@@ -170,12 +206,17 @@ void blink_once() {
 }
 
 void start_server() {
-  server.on("/", handle_persistent_forms);
+  server.on("/", [] () { server.send(200, "text/html", String(ROOT_PAGE_BODY)); });
+  server.on("/config", handle_persistent_forms);
   server.on("/save", handle_persistent_save);
-  server.on("/blink", []() {
-    blink_once();
-    server.send(200, "text/plain", "blinking");
+  server.on("/log", [] () { server.send(200, "text/html", String(LOG_PAGE_BODY)); });
+  server.on("/get_log", [] () { 
+    server.send(200, "text/plain", DEBUG_LOG_BUFFER);
+    clear_debug_log();
   });
+  server.on("/restart", [] () { server.send(200, "text/plain", "Restarting..."); ESP.restart(); });
+  server.on("/blink", []() { blink_once(); server.send(200, "text/plain", "blinking"); });
+
   server.onNotFound([]() {
     digitalWrite(LED_BUILTIN, 1);
     String message = "File Not Found\n\n";
@@ -375,6 +416,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void setup() {
+  DEBUG_LOG_BUFFER.reserve(DEBUG_LOG_BUFFER_SIZE);
   // Serial is either hooked up to heatpump or USB
   if (!USE_HEATPUMP) {
     Serial.begin(115200);
