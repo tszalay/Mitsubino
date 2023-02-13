@@ -261,87 +261,65 @@ void start_ap_and_server() {
   WiFi.disconnect();
 }
 
-void hpSettingsChanged() {
-  const size_t bufferSize = JSON_OBJECT_SIZE(6);
-  DynamicJsonDocument root(bufferSize);
+void send_hp_settings(const heatpumpSettings& settings) {
+  DynamicJsonDocument msg(JSON_OBJECT_SIZE(6));
+  msg["power"] = settings.power;
+  msg["mode"] = settings.mode;
+  msg["temperature"] = settings.temperature;
+  msg["fan"] = settings.fan;
+  msg["vane"] = settings.vane;
+  msg["wideVane"] = settings.wideVane;
 
-  heatpumpSettings currentSettings = heat_pump.getSettings();
+  String s;
+  serializeJson(msg, s);
 
-  root["power"] = currentSettings.power;
-  root["mode"] = currentSettings.mode;
-  root["temperature"] = currentSettings.temperature;
-  root["fan"] = currentSettings.fan;
-  root["vane"] = currentSettings.vane;
-  root["wideVane"] = currentSettings.wideVane;
-  //root["iSee"]        = currentSettings.iSee;
-
-  char buffer[512];
-  serializeJson(root, buffer);
-
-  bool retain = true;
-  if (!mqtt_client.publish(heatpump_topic, buffer, retain)) {
-    mqtt_client.publish(heatpump_debug_topic, "failed to publish to heatpump topic");
-  }
+  if (!mqtt_client.publish(heatpump_topic, s.c_str(), true))
+    debug_print("Failed to publish settings change");
 }
 
-void hpStatusChanged(heatpumpStatus currentStatus) {
-  // send room temp and operating info
-  const size_t bufferSizeInfo = JSON_OBJECT_SIZE(2);
-  DynamicJsonDocument rootInfo(bufferSizeInfo);
+void send_hp_status(const heatpumpStatus& status) {
+  {
+    // send room temp and operating info
+    DynamicJsonDocument msg(JSON_OBJECT_SIZE(3));
+    msg["roomTemperature"] = status.roomTemperature;
+    msg["operating"] = status.operating;
+    msg["compressorFrequency"] = status.compressorFrequency;
 
-  rootInfo["roomTemperature"] = currentStatus.roomTemperature;
-  rootInfo["operating"] = currentStatus.operating;
-
-  char bufferInfo[512];
-  serializeJson(rootInfo, bufferInfo);
-
-  if (!mqtt_client.publish(heatpump_status_topic, bufferInfo, true)) {
-    mqtt_client.publish(heatpump_debug_topic, "failed to publish to room temp and operation status to heatpump/status topic");
+    String s;
+    serializeJson(msg, s);
+    if (!mqtt_client.publish(heatpump_status_topic, s.c_str(), true))
+      debug_println("failed to publish to room temp and operation status to heatpump/status topic");
   }
 
-  // send the timer info
-  const size_t bufferSizeTimers = JSON_OBJECT_SIZE(5);
-  DynamicJsonDocument rootTimers(bufferSizeTimers);
+  {
+    // send the timer info
+    DynamicJsonDocument msg(JSON_OBJECT_SIZE(5));
 
-  rootTimers["mode"] = currentStatus.timers.mode;
-  rootTimers["onMins"] = currentStatus.timers.onMinutesSet;
-  rootTimers["onRemainMins"] = currentStatus.timers.onMinutesRemaining;
-  rootTimers["offMins"] = currentStatus.timers.offMinutesSet;
-  rootTimers["offRemainMins"] = currentStatus.timers.offMinutesRemaining;
+    msg["mode"] = status.timers.mode;
+    msg["onMins"] = status.timers.onMinutesSet;
+    msg["onRemainMins"] = status.timers.onMinutesRemaining;
+    msg["offMins"] = status.timers.offMinutesSet;
+    msg["offRemainMins"] = status.timers.offMinutesRemaining;
 
-  char bufferTimers[512];
-  serializeJson(rootTimers, bufferTimers);
+    String s;
+    serializeJson(msg, s);
 
-  if (!mqtt_client.publish(heatpump_timers_topic, bufferTimers, true)) {
-    mqtt_client.publish(heatpump_debug_topic, "failed to publish timer info to heatpump/status topic");
+    if (!mqtt_client.publish(heatpump_timers_topic, s.c_str(), true))
+      debug_println("failed to publish timer info to heatpump/status topic");
   }
 }
 
 void hpPacketDebug(byte* packet, unsigned int length, char* packetDirection) {
-  if (_debugMode) {
-    String message;
-    for (int idx = 0; idx < length; idx++) {
-      if (packet[idx] < 16) {
-        message += "0";  // pad single hex digits with a 0
-      }
-      message += String(packet[idx], HEX) + " ";
-    }
-
-    const size_t bufferSize = JSON_OBJECT_SIZE(6);
-    DynamicJsonDocument root(bufferSize);
-
-    root[packetDirection] = message;
-
-    char buffer[512];
-    serializeJson(root, buffer);
-
-    if (!mqtt_client.publish(heatpump_debug_topic, buffer)) {
-      mqtt_client.publish(heatpump_debug_topic, "failed to publish to heatpump/debug topic");
-    }
+  debug_println("Heatpump packet of length ", length, " with direction ", packetDirection);
+  for (int idx = 0; idx < length; idx++) {
+    if (packet[idx] < 16)
+      debug_print("0"); // pad single hex digits with a 0
+    debug_print(String(packet[idx], HEX), " ");
   }
+  debug_print("\n");
 }
 
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+/*void mqttCallback(char* topic, byte* payload, unsigned int length) {
   // Copy payload into message buffer
   char message[length + 1];
   for (int i = 0; i < length; i++) {
@@ -413,7 +391,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   } else {  //should never get called, as that would mean something went wrong with subscribe
     mqtt_client.publish(heatpump_debug_topic, "heatpump: wrong topic received");
   }
-}
+}*/
 
 void setup() {
   DEBUG_LOG_BUFFER.reserve(DEBUG_LOG_BUFFER_SIZE);
@@ -469,7 +447,7 @@ void setup() {
 
   int mqtt_port = data[PFIELD::mqtt_port].toInt();
   mqtt_client.setServer(data[PFIELD::mqtt_hostname].c_str(), mqtt_port);
-  mqtt_client.setCallback(mqttCallback);
+  //mqtt_client.setCallback(mqttCallback);
   mqtt_client.setBufferSize(1024);
   bool ret = mqtt_client.connect(
     data[PFIELD::my_hostname].c_str(),
@@ -481,38 +459,17 @@ void setup() {
     debug_println("MQTT client failed to connect, state: ", mqtt_client.state());
 
   // connect to the heatpump. Callbacks first so that the hpPacketDebug callback is available for connect()
-  /*heat_pump.setSettingsChangedCallback(hpSettingsChanged);
-  heat_pump.setStatusChangedCallback(hpStatusChanged);
-  heat_pump.setPacketCallback(hpPacketDebug);
-  heat_pump.connect(&Serial);*/
+  if (USE_HEATPUMP) {
+    heat_pump.setSettingsChangedCallback([] () { send_hp_settings(heat_pump.getSettings()); });
+    heat_pump.setStatusChangedCallback(send_hp_status);
+    heat_pump.setPacketCallback(hpPacketDebug);
+    heat_pump.enableExternalUpdate(); // IR remote settings will take effect
+    heat_pump.enableAutoUpdate(); // calling sync() will propagate setSettings() call
+    heat_pump.connect(&Serial);
+  }
 }
 
 void loop(void) {
-  if (millis() > (lastTempSend + SEND_ROOM_TEMP_INTERVAL_MS)) {  // only send the temperature every 60s
-    //hpStatusChanged(heat_pump.getStatus());
-    const size_t bufferSize = JSON_OBJECT_SIZE(7);
-    DynamicJsonDocument root(bufferSize);
-
-    root["power"] = 23.0f;
-    root["mode"] = 5;
-    root["temperature"] = 62;
-    root["fan"] = 2;
-    root["vane"] = 3;
-    root["Data0"] = millis();
-    root["Data1"] = (float)(millis() % 14537);
-    //root["iSee"]        = currentSettings.iSee;
-
-    char buffer[512];
-    serializeJson(root, buffer);
-
-    bool retain = true;
-    if (!mqtt_client.publish("My_Sensors/sensor1/data", buffer, retain))
-      debug_println("Failed to publish message");
-    else
-      debug_println("Sent MQTT packet");
-    lastTempSend = millis();
-  }
-
   server.handleClient();
   ArduinoOTA.handle();
   MDNS.update();
