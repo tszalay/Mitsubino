@@ -49,6 +49,7 @@ struct SimpleTimer {
 
 SimpleTimer g_sync_timer{100};
 SimpleTimer g_send_timer{15000};
+SimpleTimer g_log_raw_timer{60000};
 
 // ------------- persistent data save/restore helpers -------------
 
@@ -164,7 +165,7 @@ void debug_println(const T&... t) {
 /* Root page */
 const char ROOT_PAGE_BODY[] PROGMEM = R"=====(
 <!DOCTYPE html><html><body><p>
-ESP8266 Mitsubino Server:<br>
+ESP8266 Mitsubino Server version 1.0.0:<br>
 <a href="config">Configuration</a><br>
 <a href="log">View log</a><br>
 <a href="restart">Restart</a><br>
@@ -341,6 +342,8 @@ void send_hp_status(const heatpumpStatus& status) {
 }
 
 void hp_debug(byte* packet, unsigned int length, char* packetDirection) {
+  if (String(packetDirection) == String("packetSent") || !g_log_raw_timer.tick())
+    return;
   debug_println("Heatpump packet of length ", length, " with direction ", packetDirection);
   for (int idx = 0; idx < length; idx++) {
     if (packet[idx] < 16)
@@ -348,6 +351,40 @@ void hp_debug(byte* packet, unsigned int length, char* packetDirection) {
     debug_print(String(packet[idx], HEX), " ");
   }
   debug_print("\n");
+}
+
+void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
+  if (String(topic) != get_topic_name("control")) {
+    debug_println("Received message at unrecognized topic: ", topic);
+    return;
+  }
+
+  // this is probably fine
+  String message;
+  message.concat((const char*)payload, length);
+  debug_println("Got MQTT message on topic ", topic, ": ", message);
+  DynamicJsonDocument root(JSON_OBJECT_SIZE(6));
+  DeserializationError error = deserializeJson(root, message.c_str());
+
+  if (error) {
+    debug_println("Error parsing received mqtt message: ", error.c_str());
+    return;
+  }
+
+  if (root.containsKey("power"))
+    g_heat_pump.setPowerSetting((const char*)root["power"]);
+  if (root.containsKey("mode"))
+    g_heat_pump.setModeSetting(root["mode"]);
+  if (root.containsKey("temperature"))
+    g_heat_pump.setTemperature(root["temperature"]);
+  if (root.containsKey("fan"))
+    g_heat_pump.setFanSpeed(root["fan"]);
+  if (root.containsKey("vane"))
+    g_heat_pump.setVaneSetting(root["vane"]);
+  if (root.containsKey("wideVane"))
+    g_heat_pump.setWideVaneSetting(root["wideVane"]);
+  if (root.containsKey("remoteTemp"))
+    g_heat_pump.setRemoteTemperature(root["remoteTemp"]);
 }
 
 void mock_heat_pump_sync() {
@@ -369,80 +406,6 @@ void mock_heat_pump_sync() {
   send_hp_status(status);
   send_hp_settings(settings);
 }
-
-/*void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  // Copy payload into message buffer
-  char message[length + 1];
-  for (int i = 0; i < length; i++) {
-    message[i] = (char)payload[i];
-  }
-  message[length] = '\0';
-
-  if (strcmp(topic, heatpump_set_topic) == 0) {  //if the incoming message is on the heatpump_set_topic topic...
-    // Parse message into JSON
-    const size_t bufferSize = JSON_OBJECT_SIZE(6);
-    DynamicJsonDocument root(bufferSize);
-    DeserializationError error = deserializeJson(root, message);
-
-    if (error) {
-      g_mqtt_client.publish(heatpump_debug_topic, "!root.success(): invalid JSON on heatpump_set_topic...");
-      return;
-    }
-
-    // Step 3: Retrieve the values
-    if (root.containsKey("power")) {
-      const char* power = root["power"];
-      g_heat_pump.setPowerSetting(power);
-    }
-
-    if (root.containsKey("mode")) {
-      const char* mode = root["mode"];
-      g_heat_pump.setModeSetting(mode);
-    }
-
-    if (root.containsKey("temperature")) {
-      float temperature = root["temperature"];
-      g_heat_pump.setTemperature(temperature);
-    }
-
-    if (root.containsKey("fan")) {
-      const char* fan = root["fan"];
-      g_heat_pump.setFanSpeed(fan);
-    }
-
-    if (root.containsKey("vane")) {
-      const char* vane = root["vane"];
-      g_heat_pump.setVaneSetting(vane);
-    }
-
-    if (root.containsKey("wideVane")) {
-      const char* wideVane = root["wideVane"];
-      g_heat_pump.setWideVaneSetting(wideVane);
-    }
-
-    if (root.containsKey("remoteTemp")) {
-      float remoteTemp = root["remoteTemp"];
-      g_heat_pump.setRemoteTemperature(remoteTemp);
-    } else {
-      bool result = g_heat_pump.update();
-
-      if (!result) {
-        g_mqtt_client.publish(heatpump_debug_topic, "heatpump: update() failed");
-      }
-    }
-
-  } else if (strcmp(topic, heatpump_debug_set_topic) == 0) {  //if the incoming message is on the heatpump_debug_set_topic topic...
-    if (strcmp(message, "on") == 0) {
-      _debugMode = true;
-      g_mqtt_client.publish(heatpump_debug_topic, "debug mode enabled");
-    } else if (strcmp(message, "off") == 0) {
-      _debugMode = false;
-      g_mqtt_client.publish(heatpump_debug_topic, "debug mode disabled");
-    }
-  } else {  //should never get called, as that would mean something went wrong with subscribe
-    g_mqtt_client.publish(heatpump_debug_topic, "heatpump: wrong topic received");
-  }
-}*/
 
 void setup() {
   g_debug_log_buffer.reserve(DEBUG_LOG_BUFFER_SIZE);
@@ -497,22 +460,25 @@ void setup() {
 
   int mqtt_port = g_persistent_data[PFIELD::mqtt_port].toInt();
   g_mqtt_client.setServer(g_persistent_data[PFIELD::mqtt_hostname].c_str(), mqtt_port);
-  //g_mqtt_client.setCallback(mqttCallback);
+  g_mqtt_client.setCallback(handle_mqtt_message);
   g_mqtt_client.setBufferSize(1024);
   bool ret = g_mqtt_client.connect(
     g_persistent_data[PFIELD::my_hostname].c_str(),
     g_persistent_data[PFIELD::mqtt_username].c_str(),
     g_persistent_data[PFIELD::mqtt_password].c_str());
-  if (ret)
+  if (ret) {
     debug_println("MQTT client connected");
-  else
+    g_mqtt_client.subscribe(get_topic_name("control").c_str());
+  }
+  else {
     debug_println("MQTT client failed to connect, state: ", g_mqtt_client.state());
+  }
 
   // connect to the heatpump. Callbacks first so that the hpPacketDebug callback is available for connect()
   if (USE_HEATPUMP) {
     g_heat_pump.setSettingsChangedCallback([] () { send_hp_settings(g_heat_pump.getSettings()); });
     g_heat_pump.setStatusChangedCallback(send_hp_status);
-    //g_heat_pump.setPacketCallback(hp_debug);
+    g_heat_pump.setPacketCallback(hp_debug);
     g_heat_pump.enableExternalUpdate(); // IR remote settings will take effect
     g_heat_pump.enableAutoUpdate(); // calling sync() will propagate setSettings() call
     g_heat_pump.connect(&Serial);
