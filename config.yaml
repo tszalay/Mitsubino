@@ -1,0 +1,194 @@
+mqtt:
+  number:
+  - command_template: '{ "temperature": {{ (value-32)*5/9 }} }'
+    command_topic: heatpumps/hp_basement/control
+    max: 80
+    min: 60
+    mode: box
+    name: Basement set temperature
+    optimistic: false
+    state_topic: heatpumps/hp_basement/settings
+    step: 1
+    unit_of_measurement: "\xB0F"
+    value_template: '{{ value_json.temperature * 9/5 + 32 }}'
+  - command_template: '{ "temperature": {{ (value-32)*5/9 }} }'
+    command_topic: heatpumps/hp_office/control
+    max: 80
+    min: 60
+    mode: box
+    name: Office set temperature
+    optimistic: false
+    state_topic: heatpumps/hp_office/settings
+    step: 1
+    unit_of_measurement: "\xB0F"
+    value_template: '{{ value_json.temperature * 9/5 + 32 }}'
+  - command_template: '{ "temperature": {{ (value-32)*5/9 }} }'
+    command_topic: heatpumps/hp_bedroom/control
+    max: 80
+    min: 60
+    mode: box
+    name: Bedroom set temperature
+    optimistic: false
+    state_topic: heatpumps/hp_bedroom/settings
+    step: 1
+    unit_of_measurement: "\xB0F"
+    value_template: '{{ value_json.temperature * 9/5 + 32 }}'
+  - command_template: '{ "temperature": {{ (value-32)*5/9 }} }'
+    command_topic: heatpumps/hp_kitchen/control
+    max: 80
+    min: 60
+    mode: box
+    name: Kitchen set temperature
+    optimistic: false
+    state_topic: heatpumps/hp_kitchen/settings
+    step: 1
+    unit_of_measurement: "\xB0F"
+    value_template: '{{ value_json.temperature * 9/5 + 32 }}'
+  - command_template: '{ "temperature": {{ (value-32)*5/9 }} }'
+    command_topic: heatpumps/hp_livingroom/control
+    max: 80
+    min: 60
+    mode: box
+    name: Living Room set temperature
+    optimistic: false
+    state_topic: heatpumps/hp_livingroom/settings
+    step: 1
+    unit_of_measurement: "\xB0F"
+    value_template: '{{ value_json.temperature * 9/5 + 32 }}'
+  sensor:
+  - device_class: temperature
+    name: Basement temperature
+    state_topic: heatpumps/hp_basement/status
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.roomTemperature | float }}'
+  - name: Basement operating
+    state_topic: heatpumps/hp_basement/status
+    unit_of_measurement: Operating
+    value_template: '{{ value_json.operating | int }}'
+  - device_class: temperature
+    name: Basement set temperature
+    state_topic: heatpumps/hp_basement/settings
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.temperature }}'
+  - name: Basement power
+    state_topic: heatpumps/hp_basement/settings
+    value_template: '{{ value_json.power }}'
+  - device_class: temperature
+    name: Office temperature
+    state_topic: heatpumps/hp_office/status
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.roomTemperature | float }}'
+  - name: Office operating
+    state_topic: heatpumps/hp_office/status
+    unit_of_measurement: Operating
+    value_template: '{{ value_json.operating | int }}'
+  - device_class: temperature
+    name: Office set temperature
+    state_topic: heatpumps/hp_office/settings
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.temperature }}'
+  - name: Office power
+    state_topic: heatpumps/hp_office/settings
+    value_template: '{{ value_json.power }}'
+  - device_class: temperature
+    name: Bedroom temperature
+    state_topic: heatpumps/hp_bedroom/status
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.roomTemperature | float }}'
+  - name: Bedroom operating
+    state_topic: heatpumps/hp_bedroom/status
+    unit_of_measurement: Operating
+    value_template: '{{ value_json.operating | int }}'
+  - device_class: temperature
+    name: Bedroom set temperature
+    state_topic: heatpumps/hp_bedroom/settings
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.temperature }}'
+  - name: Bedroom power
+    state_topic: heatpumps/hp_bedroom/settings
+    value_template: '{{ value_json.power }}'
+  - device_class: temperature
+    name: Kitchen temperature
+    state_topic: heatpumps/hp_kitchen/status
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.roomTemperature | float }}'
+  - name: Kitchen operating
+    state_topic: heatpumps/hp_kitchen/status
+    unit_of_measurement: Operating
+    value_template: '{{ value_json.operating | int }}'
+  - device_class: temperature
+    name: Kitchen set temperature
+    state_topic: heatpumps/hp_kitchen/settings
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.temperature }}'
+  - name: Kitchen power
+    state_topic: heatpumps/hp_kitchen/settings
+    value_template: '{{ value_json.power }}'
+  - device_class: temperature
+    name: Living Room temperature
+    state_topic: heatpumps/hp_livingroom/status
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.roomTemperature | float }}'
+  - name: Living Room operating
+    state_topic: heatpumps/hp_livingroom/status
+    unit_of_measurement: Operating
+    value_template: '{{ value_json.operating | int }}'
+  - device_class: temperature
+    name: Living Room set temperature
+    state_topic: heatpumps/hp_livingroom/settings
+    unit_of_measurement: "\xB0C"
+    value_template: '{{ value_json.temperature }}'
+  - name: Living Room power
+    state_topic: heatpumps/hp_livingroom/settings
+    value_template: '{{ value_json.power }}'
+  switch:
+  - command_topic: heatpumps/hp_basement/control
+    name: Basement power
+    optimistic: false
+    payload_off: '{"power":"OFF"}'
+    payload_on: '{"power":"ON"}'
+    retain: false
+    state_off: 'OFF'
+    state_on: 'ON'
+    state_topic: heatpumps/hp_basement/settings
+    value_template: '{{ value_json.power }}'
+  - command_topic: heatpumps/hp_office/control
+    name: Office power
+    optimistic: false
+    payload_off: '{"power":"OFF"}'
+    payload_on: '{"power":"ON"}'
+    retain: false
+    state_off: 'OFF'
+    state_on: 'ON'
+    state_topic: heatpumps/hp_office/settings
+    value_template: '{{ value_json.power }}'
+  - command_topic: heatpumps/hp_bedroom/control
+    name: Bedroom power
+    optimistic: false
+    payload_off: '{"power":"OFF"}'
+    payload_on: '{"power":"ON"}'
+    retain: false
+    state_off: 'OFF'
+    state_on: 'ON'
+    state_topic: heatpumps/hp_bedroom/settings
+    value_template: '{{ value_json.power }}'
+  - command_topic: heatpumps/hp_kitchen/control
+    name: Kitchen power
+    optimistic: false
+    payload_off: '{"power":"OFF"}'
+    payload_on: '{"power":"ON"}'
+    retain: false
+    state_off: 'OFF'
+    state_on: 'ON'
+    state_topic: heatpumps/hp_kitchen/settings
+    value_template: '{{ value_json.power }}'
+  - command_topic: heatpumps/hp_livingroom/control
+    name: Living Room power
+    optimistic: false
+    payload_off: '{"power":"OFF"}'
+    payload_on: '{"power":"ON"}'
+    retain: false
+    state_off: 'OFF'
+    state_on: 'ON'
+    state_topic: heatpumps/hp_livingroom/settings
+    value_template: '{{ value_json.power }}'
