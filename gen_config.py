@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
+import argparse
 import yaml
-from collections import defaultdict
 
 units = {
     "hp_basement":"Basement",
@@ -11,13 +11,22 @@ units = {
     "hp_livingroom":"Living Room"
 }
 
-config_base = open("config_template.yaml").read().strip()
+parser = argparse.ArgumentParser()
+parser.add_argument("template", help="YAML template to use. Allowed keys are NAME, HOSTNAME, HANAME")
+args = parser.parse_args()
 
-config = {"mqtt":defaultdict(list)}
+config_base = open(args.template).read().strip()
+
+config = None
 for host, name in units.items():
-    this_yaml = yaml.safe_load(config_base.replace("HOSTNAME",host).replace("NAME",name))
-    for k,v in this_yaml["mqtt"].items():
-        config["mqtt"][k].extend(v)
+    haname = name.replace(" ","_").lower()
+    this_yaml = yaml.safe_load(config_base.replace("HANAME",haname).replace("HOSTNAME",host).replace("NAME",name))
+    if config is None:
+        config = this_yaml
+    elif isinstance(config, list):
+        config.extend(this_yaml)
+    elif isinstance(config, dict):
+        for k,v in this_yaml.items():
+            config[k].extend(v)
 
-config["mqtt"] = dict(**config["mqtt"])
-yaml.dump(config, open("config.yaml","w"))
+print(yaml.dump(config))

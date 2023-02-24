@@ -1,0 +1,8 @@
+- platform: history_stats
+  name: NAME duty cycle
+  entity_id: binary_sensor.HANAME_operating
+  state: "on"
+  type: ratio
+  end: '{{ now() }}' 
+  duration: 
+    minutes: 30
