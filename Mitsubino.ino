@@ -387,6 +387,20 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
     g_heat_pump.setRemoteTemperature(root["remoteTemp"]);
 }
 
+void mqtt_connect() {
+  bool ret = g_mqtt_client.connect(
+    g_persistent_data[PFIELD::my_hostname].c_str(),
+    g_persistent_data[PFIELD::mqtt_username].c_str(),
+    g_persistent_data[PFIELD::mqtt_password].c_str());
+  if (ret) {
+    debug_println("MQTT client connected");
+    g_mqtt_client.subscribe(get_topic_name("control").c_str());
+  }
+  else {
+    debug_println("MQTT client failed to connect, state: ", g_mqtt_client.state());
+  }
+}
+
 void mock_heat_pump_sync() {
   if (!g_send_timer.tick())
     return;
@@ -462,17 +476,7 @@ void setup() {
   g_mqtt_client.setServer(g_persistent_data[PFIELD::mqtt_hostname].c_str(), mqtt_port);
   g_mqtt_client.setCallback(handle_mqtt_message);
   g_mqtt_client.setBufferSize(1024);
-  bool ret = g_mqtt_client.connect(
-    g_persistent_data[PFIELD::my_hostname].c_str(),
-    g_persistent_data[PFIELD::mqtt_username].c_str(),
-    g_persistent_data[PFIELD::mqtt_password].c_str());
-  if (ret) {
-    debug_println("MQTT client connected");
-    g_mqtt_client.subscribe(get_topic_name("control").c_str());
-  }
-  else {
-    debug_println("MQTT client failed to connect, state: ", g_mqtt_client.state());
-  }
+  mqtt_connect();
 
   // connect to the heatpump. Callbacks first so that the hpPacketDebug callback is available for connect()
   if (USE_HEATPUMP) {
@@ -504,5 +508,9 @@ void loop(void) {
     else {
       mock_heat_pump_sync();
     }
+  }
+  else {
+    debug_println("MQTT disconnected, attempting reconnect...");
+    mqtt_connect();
   }
 }
