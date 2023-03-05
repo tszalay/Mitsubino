@@ -1,0 +1,14 @@
+cards:
+- type: entities
+  title: NAME
+  entities:
+  - entity: switch.HANAME_power
+    name: Power
+  - entity: number.HANAME_set_temperature
+    name: Temp
+  - entity: select.HANAME_fan
+    name: Fan
+  - entity: select.HANAME_vane
+    name: Vane
+  - entity: select.HANAME_mode
+    name: Mode

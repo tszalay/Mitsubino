@@ -4,21 +4,12 @@ binary_sensor:
     value_template: '{{ value_json.operating }}'
     payload_on: true
     payload_off: false
-  - state_topic: "heatpumps/HOSTNAME/settings"
-    name: "NAME power"
-    value_template: '{{ value_json.power }}'
 
 sensor:
   - state_topic: "heatpumps/HOSTNAME/status"
     name: "NAME temperature"
     device_class: "temperature"
     value_template: '{{ value_json.roomTemperature | float }}'
-    unit_of_measurement: "°C"
-
-  - state_topic: "heatpumps/HOSTNAME/settings"
-    name: "NAME set temperature"
-    device_class: "temperature"
-    value_template: '{{ value_json.temperature }}'
     unit_of_measurement: "°C"
 
 switch:
@@ -30,8 +21,6 @@ switch:
     state_on: "ON"
     state_off: "OFF"
     value_template: '{{ value_json.power }}'
-    retain: false
-    optimistic: false
 
 number:
   - name: "NAME set temperature"
@@ -40,8 +29,29 @@ number:
     min: 60
     max: 80
     mode: "box"
-    optimistic: false
     step: 1
     unit_of_measurement: "°F"
-    value_template: '{{ value_json.temperature * 9/5 + 32 }}'
+    value_template: '{{ (value_json.temperature * 9/5 + 32) | round() }}'
     command_template: '{ "temperature": {{ (value-32)*5/9 }} }'
+
+select:
+  - name: "NAME fan"
+    command_topic: "heatpumps/HOSTNAME/control"
+    state_topic: "heatpumps/HOSTNAME/settings"
+    value_template: '{{ value_json.fan }}'
+    command_template: '{ "fan": "{{ value }}" }'
+    options: ["AUTO", "QUIET", "1", "2", "3", "4"]
+
+  - name: "NAME vane"
+    command_topic: "heatpumps/HOSTNAME/control"
+    state_topic: "heatpumps/HOSTNAME/settings"
+    value_template: '{{ value_json.vane }}'
+    command_template: '{ "vane": "{{ value }}" }'
+    options: ["AUTO", "1", "2", "3", "4", "5", "SWING"]
+
+  - name: "NAME mode"
+    command_topic: "heatpumps/HOSTNAME/control"
+    state_topic: "heatpumps/HOSTNAME/settings"
+    value_template: '{{ value_json.mode }}'
+    command_template: '{ "mode": "{{ value }}" }'
+    options: ["HEAT", "DRY", "COOL", "FAN", "AUTO"]

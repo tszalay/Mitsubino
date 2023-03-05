@@ -47,7 +47,6 @@ struct SimpleTimer {
   }
 };
 
-SimpleTimer g_sync_timer{100};
 SimpleTimer g_send_timer{15000};
 SimpleTimer g_log_raw_timer{60000};
 
@@ -142,7 +141,7 @@ void _debug_print_impl(const T& t) {
   if (!USE_HEATPUMP)
     Serial.print(t);
 }
- 
+
 template<typename T, typename... U>
 void _debug_print_impl(const T& t, const U&... u) {
   _debug_print_impl(t);
@@ -156,7 +155,7 @@ void debug_print(const T&... t) {
 
 template<typename... T>
 void debug_println(const T&... t) {
-  debug_print(t..., "\n");
+  debug_print(millis(), ": ", t..., "\n");
 }
 
 
@@ -181,7 +180,7 @@ ESP8266 debug log:<br>
 <span id="log_text"><br></span>
 </p></div>
 <script>
-setInterval(getData, 2000); 
+setInterval(getData, 2000);
 function getData() {
   var xhttp = new XMLHttpRequest();
   xhttp.onreadystatechange = function() {
@@ -235,7 +234,7 @@ void start_server() {
   g_server.on("/config", handle_persistent_forms);
   g_server.on("/save", handle_persistent_save);
   g_server.on("/log", [] () { g_server.send(200, "text/html", String(LOG_PAGE_BODY)); });
-  g_server.on("/get_log", [] () { 
+  g_server.on("/get_log", [] () {
     g_server.send(200, "text/plain", g_debug_log_buffer);
     clear_debug_log();
   });
@@ -286,26 +285,30 @@ void start_ap_and_server() {
   WiFi.disconnect();
 }
 
-void send_hp_settings(const heatpumpSettings& settings) {
-  DynamicJsonDocument msg(JSON_OBJECT_SIZE(7));
-  msg["power"] = settings.power;
-  msg["mode"] = settings.mode;
-  msg["temperature"] = settings.temperature;
-  msg["fan"] = settings.fan;
-  msg["vane"] = settings.vane;
-  msg["wideVane"] = settings.wideVane;
-  msg["connected"] = settings.connected;
+void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status) {
+  if (!settings.connected || status.roomTemperature == 0) {
+    debug_println("Skipping send due to invalid data");
+    return;
+  }
+  {
+    DynamicJsonDocument msg(JSON_OBJECT_SIZE(7));
+    msg["power"] = settings.power;
+    msg["mode"] = settings.mode;
+    msg["temperature"] = settings.temperature;
+    msg["fan"] = settings.fan;
+    msg["vane"] = settings.vane;
+    msg["wideVane"] = settings.wideVane;
+    msg["connected"] = settings.connected;
 
-  String s;
-  serializeJson(msg, s);
+    String s;
+    serializeJson(msg, s);
 
-  if (!g_mqtt_client.publish(get_topic_name("settings").c_str(), s.c_str(), true))
-    debug_print("Failed to publish settings change to settings topic");
-  else
-    debug_println("sent settings: ", s);
-}
+    if (!g_mqtt_client.publish(get_topic_name("settings").c_str(), s.c_str(), true))
+      debug_print("Failed to publish settings change to settings topic");
+    else
+      debug_println("sent settings: ", s);
+  }
 
-void send_hp_status(const heatpumpStatus& status) {
   {
     // send room temp and operating info
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(3));
@@ -320,7 +323,6 @@ void send_hp_status(const heatpumpStatus& status) {
     else
       debug_println("sent status: ", s);
   }
-
   {
     // send the timer info
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(5));
@@ -337,8 +339,11 @@ void send_hp_status(const heatpumpStatus& status) {
     if (!g_mqtt_client.publish(get_topic_name("timers").c_str(), s.c_str(), true))
       debug_println("failed to publish timer info to timer topic");
   }
-
   g_send_timer.reset();
+}
+
+void send_hp_data() {
+  send_hp_data(g_heat_pump.getSettings(), g_heat_pump.getStatus());
 }
 
 void hp_debug(byte* packet, unsigned int length, char* packetDirection) {
@@ -385,6 +390,9 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
     g_heat_pump.setWideVaneSetting(root["wideVane"]);
   if (root.containsKey("remoteTemp"))
     g_heat_pump.setRemoteTemperature(root["remoteTemp"]);
+
+  g_heat_pump.update();
+  debug_println("Updated heat pump");
 }
 
 void mqtt_connect() {
@@ -417,8 +425,7 @@ void mock_heat_pump_sync() {
   settings.vane = millis() % 3 ? "low" : "high";
   settings.temperature = 22.3f + (millis() % 10);
   settings.power = "on";
-  send_hp_status(status);
-  send_hp_settings(settings);
+  send_hp_data(settings, status);
 }
 
 void setup() {
@@ -480,9 +487,10 @@ void setup() {
 
   // connect to the heatpump. Callbacks first so that the hpPacketDebug callback is available for connect()
   if (USE_HEATPUMP) {
-    g_heat_pump.setSettingsChangedCallback([] () { send_hp_settings(g_heat_pump.getSettings()); });
-    g_heat_pump.setStatusChangedCallback(send_hp_status);
+    g_heat_pump.setSettingsChangedCallback([] () { debug_println("Got external update"); send_hp_data(); });
+    g_heat_pump.setStatusChangedCallback([] (heatpumpStatus) { send_hp_data(); });
     g_heat_pump.setPacketCallback(hp_debug);
+    g_heat_pump.setOnConnectCallback([] () { debug_println("Connected to heatpump"); });
     g_heat_pump.enableExternalUpdate(); // IR remote settings will take effect
     g_heat_pump.enableAutoUpdate(); // calling sync() will propagate setSettings() call
     g_heat_pump.connect(&Serial);
@@ -496,14 +504,14 @@ void loop(void) {
   if (g_mqtt_client.connected()) {
     g_mqtt_client.loop();
     if (USE_HEATPUMP) {
-      // don't sync _too_ often, 100ms seems reasonable
-      if (g_sync_timer.tick())      
-        g_heat_pump.sync();
+      auto start = millis();
+      g_heat_pump.sync();
+      auto dt = millis() - start;
+      if (dt > 2000)
+        debug_println("Sync took ", dt, " ms");
       // send status every so often, if sync didn't already do it for us due to a change
-      if (g_send_timer.tick()) {
-        send_hp_status(g_heat_pump.getStatus());
-        send_hp_settings(g_heat_pump.getSettings());
-      }
+      if (g_send_timer.tick())
+        send_hp_data();
     }
     else {
       mock_heat_pump_sync();
