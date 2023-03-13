@@ -391,14 +391,6 @@ void loop_shared() {
 #ifdef ESP8266
   MDNS.update();
 #endif
-#ifdef ESP32
-  if (WiFi.status() != WL_CONNECTED) {
-    debug_println("WiFi disconnected, attempting reconnect");
-    WiFi.disconnect();
-    WiFi.reconnect();
-    debug_println("Reconnect attempt complete, current status ", WiFi.status());
-  }
-#endif
 }
 
 #ifdef ESP32

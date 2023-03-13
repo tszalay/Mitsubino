@@ -4,7 +4,7 @@
 
 #include "MitsubinoShared.h"
 
-#include <HeatPump.h>      // SwiCago, submodule installed in Arduino library dir
+#include "src/HeatPump/src/HeatPump.h"      // SwiCago, submodule installed in Arduino library dir
 
 // whether we are plugged into USB or the heat pump.
 // this is compile-time const because if we reconnect to the USB serial
@@ -12,10 +12,11 @@
 static const bool USE_HEATPUMP = true;
 
 HeatPump g_heat_pump;
+float g_temp_fudge = 0.01; // fudge temp by a tiny bit so that HA shows distinct values
 
 SimpleTimer g_send_timer{15000}; // updates
 SimpleTimer g_log_raw_timer{60000}; // logging of raw packets, when enabled
-SimpleTimer g_remote_temp_timer{120000}; // remote temp timeout to revert to internal thermostat
+unsigned long g_last_remote_temp_write = 0; // less simple than SimpleTimer
 
 void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status) {
   if (!settings.connected || status.roomTemperature == 0) {
@@ -44,9 +45,12 @@ void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status
   {
     // send room temp and operating info
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(3));
-    msg["roomTemperature"] = status.roomTemperature;
+    msg["roomTemperature"] = status.roomTemperature + g_temp_fudge;
     msg["operating"] = status.operating;
     msg["compressorFrequency"] = status.compressorFrequency;
+
+    // invert room temp fudge for next time
+    g_temp_fudge = -g_temp_fudge;
 
     String s;
     serializeJson(msg, s);
@@ -124,8 +128,15 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
     float remote_temp = root["remoteTemp"];
     g_heat_pump.setRemoteTemperature(remote_temp);
     debug_println("remote temp set to ", remote_temp);
+    g_last_remote_temp_write = millis();
     return; // packet write was immediate, no need to do anything else
   }
+
+  // send settings immediately, so that HA display can update with good response times
+  // it assumes of course that this is correct, but it should get corrected within a few
+  // seconds if something goes wrong
+  heatpumpSettings wantedSettings = g_heat_pump.getWantedSettings();
+  send_hp_data(wantedSettings, g_heat_pump.getStatus());
 
   g_heat_pump.update();
   debug_println("Updated heat pump");
@@ -178,8 +189,11 @@ void loop() {
   loop_shared();
   // doesn't matter if MQTT is down, if remote temp is lost, we cancel that.
   // looks like this is an immediate write, no waiting for return.
-  if (g_remote_temp_timer.tick())
+  if (g_last_remote_temp_write != 0 && millis() - g_last_remote_temp_write > 120*1000) {
     g_heat_pump.setRemoteTemperature(0);
+    debug_println("Reverting to internal thermostat due to remote temp timeout");
+    g_last_remote_temp_write = 0;
+  }
   if (g_mqtt_client.connected()) {
     g_mqtt_client.loop();
     if (USE_HEATPUMP) {

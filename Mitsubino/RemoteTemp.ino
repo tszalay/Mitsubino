@@ -7,7 +7,8 @@
 
 Adafruit_SHT4x sht4{};
 SimpleTimer g_temp_timer{15000};
-SimpleTimer g_mqtt_reconnect_timer{5000};
+SimpleTimer g_mqtt_reconnect_timer{100};
+int g_mqtt_reconnect_attempts = 0;
 
 void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
   /*if (String(topic) != get_topic_name("control")) {
@@ -66,36 +67,66 @@ void read_sensor() {
     debug_println("Failed to read temp sensor");
     return;
   }
-  DynamicJsonDocument msg(JSON_OBJECT_SIZE(2));
-  msg["temperature"] = temp.temperature;
-  msg["humidity"] = humidity.relative_humidity;
+  {
+    DynamicJsonDocument msg(JSON_OBJECT_SIZE(2));
+    msg["temperature"] = temp.temperature;
+    msg["humidity"] = humidity.relative_humidity;
 
-  String s;
-  serializeJson(msg, s);
+    String s;
+    serializeJson(msg, s);
 
-  // don't retain these readings, so that the heat pump unit can fallback to
-  // internal thermostat if they stop sending for some reason
-  if (!g_mqtt_client.publish(get_topic_name("reading").c_str(), s.c_str(), false))
-    debug_println("Failed to publish sensor readings to reading topic");
-  else
-    debug_println("sent reading: ", s);
+    // don't retain these readings, so that the heat pump unit can fallback to
+    // internal thermostat if they stop sending for some reason
+    if (!g_mqtt_client.publish(get_topic_name("reading").c_str(), s.c_str(), false))
+      debug_println("Failed to publish sensor readings to reading topic");
+    else
+      debug_println("sent reading: ", s);
+  }
+  {
+    DynamicJsonDocument msg(JSON_OBJECT_SIZE(1));
+    msg["remoteTemp"] = temp.temperature;
+    String s;
+    serializeJson(msg, s);
+    if (!g_mqtt_client.publish("heatpumps/hp_livingroom/control", s.c_str(), false))
+      debug_println("Failed to publish sensor readings to control topic");
+    else
+      debug_println("sent control setting: ", s);
+  }
+
 }
 
 void loop() {
   loop_shared();
-  if (!WiFi.isConnected()) {
-    delay(1000);
+
+  // crappy ad-hoc disconnect state machine. ESP8266 is much better at this.
+  if (WiFi.status() != WL_CONNECTED) {
+    debug_println("WiFi disconnected, attempting reconnect");
+    WiFi.disconnect();
+    WiFi.reconnect();
+    debug_println("Reconnect attempt complete, current status ", WiFi.status());
+    for (int i=0; i<10; i++) {
+      if (WiFi.status() == WL_CONNECTED)
+        break;
+    }
     return;
   }
 
   if (g_mqtt_client.connected()) {
+    g_mqtt_reconnect_attempts = 0;
     g_mqtt_client.loop();
     if (g_temp_timer.tick())
       read_sensor();
   }
   else if (g_mqtt_reconnect_timer.tick()) {
-    debug_println("MQTT disconnected, attempting reconnect...");
-    mqtt_connect();
+    if (g_mqtt_reconnect_attempts < 10) {
+      debug_println("MQTT disconnected, attempting reconnect...");
+      mqtt_connect();
+      g_mqtt_reconnect_attempts++;
+    }
+    else {
+      g_mqtt_reconnect_attempts = 0;
+      WiFi.disconnect();
+    }
   }
 }
 
