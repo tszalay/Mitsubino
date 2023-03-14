@@ -184,7 +184,7 @@ String get_topic_name(const char* subtopic) {
 /* Root page */
 const char ROOT_PAGE_BODY[] PROGMEM = R"=====(
 <!DOCTYPE html><html><body><p>
-ESP8266 Mitsubino Server version 1.0.0:<br>
+ESP8266/32 Mitsubino Server version 1.0.0:<br>
 <a href="config">Configuration</a><br>
 <a href="log">View log</a><br>
 <a href="restart">Restart</a><br>
@@ -196,7 +196,7 @@ ESP8266 Mitsubino Server version 1.0.0:<br>
 const char LOG_PAGE_BODY[] PROGMEM = R"=====(
 <!DOCTYPE html><html>
 <div style="white-space: pre-line"><p>
-ESP8266 debug log:<br>
+ESP debug log:<br>
 <span id="log_text"><br></span>
 </p></div>
 <script>
@@ -346,7 +346,7 @@ void configure_shared() {
   // needed for compatibility with certain (my) ASUS routers
   WiFi.setPhyMode(WIFI_PHY_MODE_11G);
 #else
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G);
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11N);
 #endif
   WiFi.hostname(g_persistent_data[PFIELD::my_hostname]);
   WiFi.begin(g_persistent_data[PFIELD::ssid].c_str(), g_persistent_data[PFIELD::password].c_str());

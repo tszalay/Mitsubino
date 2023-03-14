@@ -188,7 +188,7 @@ void setup() {
 void loop() {
   loop_shared();
   // doesn't matter if MQTT is down, if remote temp is lost, we cancel that.
-  // looks like this is an immediate write, no waiting for return.
+  // looks like this is an immediate write, no waiting for sync.
   if (g_last_remote_temp_write != 0 && millis() - g_last_remote_temp_write > 120*1000) {
     g_heat_pump.setRemoteTemperature(0);
     debug_println("Reverting to internal thermostat due to remote temp timeout");

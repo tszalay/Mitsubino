@@ -52,6 +52,9 @@ void setup() {
   WiFi.onEvent(WiFiEvent);
   configure_shared();
   Wire1.setPins(SDA1, SCL1);
+}
+
+void read_sensor() {
   if (!sht4.begin(&Wire1)) {
     debug_println("Couldn't find SHT4x");
   }
@@ -59,14 +62,14 @@ void setup() {
     sht4.setPrecision(SHT4X_HIGH_PRECISION);
     debug_println(F("SHT4x sensor connected and set to high precision"));
   }
-}
 
-void read_sensor() {
   sensors_event_t humidity, temp;
-  if (!sht4.getEvent(&humidity, &temp)) {
+  bool success = sht4.getEvent(&humidity, &temp);
+  if (!success) {
     debug_println("Failed to read temp sensor");
     return;
   }
+  
   {
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(2));
     msg["temperature"] = temp.temperature;
@@ -82,6 +85,7 @@ void read_sensor() {
     else
       debug_println("sent reading: ", s);
   }
+  if (g_persistent_data[PFIELD::my_hostname] == "remote_temp_1")
   {
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(1));
     msg["remoteTemp"] = temp.temperature;
@@ -107,6 +111,7 @@ void loop() {
     for (int i=0; i<10; i++) {
       if (WiFi.status() == WL_CONNECTED)
         break;
+      delay(1000);
     }
     return;
   }
@@ -117,7 +122,7 @@ void loop() {
     if (g_temp_timer.tick())
       read_sensor();
   }
-  else if (g_mqtt_reconnect_timer.tick()) {
+  else if (g_mqtt_reconnect_timer.tick() && !g_persistent_data[PFIELD::mqtt_hostname].isEmpty()) {
     if (g_mqtt_reconnect_attempts < 10) {
       debug_println("MQTT disconnected, attempting reconnect...");
       mqtt_connect();
