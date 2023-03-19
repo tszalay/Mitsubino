@@ -391,6 +391,9 @@ void loop_shared() {
 #ifdef ESP8266
   MDNS.update();
 #endif
+  // this gives other background tasks a chance to run on ESP platforms
+  // and nothing we do really needs to happen that fast
+  delay(50);
 }
 
 #ifdef ESP32

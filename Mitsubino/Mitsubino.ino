@@ -45,9 +45,9 @@ void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status
   {
     // send room temp and operating info
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(3));
-    msg["roomTemperature"] = status.roomTemperature + g_temp_fudge;
+    msg["roomTemperature"] = status.roomTemperature;
     msg["operating"] = status.operating;
-    msg["compressorFrequency"] = status.compressorFrequency;
+    msg["compressorFrequency"] = status.compressorFrequency + g_temp_fudge;
 
     // invert room temp fudge for next time
     g_temp_fudge = -g_temp_fudge;

@@ -1,0 +1,21 @@
+sensor:
+- device_class: temperature
+  name: Remote temperature 1
+  state_topic: heatpumps/remote_temp_1/reading
+  unit_of_measurement: "\xB0C"
+  value_template: '{{ value_json.temperature | float }}'
+- device_class: humidity
+  name: Remote humidity 1
+  state_topic: heatpumps/remote_temp_1/reading
+  unit_of_measurement: "%"
+  value_template: '{{ value_json.humidity | float }}'
+- device_class: temperature
+  name: Remote temperature 2
+  state_topic: heatpumps/remote_temp_2/reading
+  unit_of_measurement: "\xB0C"
+  value_template: '{{ value_json.temperature | float }}'
+- device_class: humidity
+  name: Remote humidity 2
+  state_topic: heatpumps/remote_temp_2/reading
+  unit_of_measurement: "%"
+  value_template: '{{ value_json.humidity | float }}'

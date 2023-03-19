@@ -9,8 +9,12 @@ sensor:
   - state_topic: "heatpumps/HOSTNAME/status"
     name: "NAME temperature"
     device_class: "temperature"
-    value_template: '{{ value_json.roomTemperature | float }}'
-    unit_of_measurement: "°C"
+    value_template: '{{ value_json.roomTemperature*2 + 27 }}'
+    unit_of_measurement: "°F"
+  - state_topic: "heatpumps/HOSTNAME/status"
+    name: "NAME wiggle"
+    value_template: '{{ value_json.wiggle }}'
+    unit_of_measurement: "na"
 
 switch:
   - name: "NAME power"
@@ -31,8 +35,8 @@ number:
     mode: "box"
     step: 1
     unit_of_measurement: "°F"
-    value_template: '{{ (value_json.temperature * 9/5 + 32) | round() }}'
-    command_template: '{ "temperature": {{ (value-32)*5/9 }} }'
+    value_template: '{{ (value_json.temperature*2 + 27) | round() }}'
+    command_template: '{ "temperature": {{ (value-27)*0.5 }} }'
 
 select:
   - name: "NAME fan"

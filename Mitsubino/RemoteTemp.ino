@@ -91,10 +91,11 @@ void read_sensor() {
     msg["remoteTemp"] = temp.temperature;
     String s;
     serializeJson(msg, s);
+    debug_println("sending control setting: ", s);
     if (!g_mqtt_client.publish("heatpumps/hp_livingroom/control", s.c_str(), false))
-      debug_println("Failed to publish sensor readings to control topic");
-    else
-      debug_println("sent control setting: ", s);
+      debug_println("Failed to publish sensor readings to living room control topic");
+    if (!g_mqtt_client.publish("heatpumps/hp_kitchen/control", s.c_str(), false))
+      debug_println("Failed to publish sensor readings to kitchen control topic");
   }
 
 }
