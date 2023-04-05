@@ -80,10 +80,13 @@ void read_sensor() {
 
     // don't retain these readings, so that the heat pump unit can fallback to
     // internal thermostat if they stop sending for some reason
-    if (!g_mqtt_client.publish(get_topic_name("reading").c_str(), s.c_str(), false))
+    if (!g_mqtt_client.publish(get_topic_name("reading").c_str(), s.c_str(), false)) {
       debug_println("Failed to publish sensor readings to reading topic");
-    else
+    }
+    else {
       debug_println("sent reading: ", s);
+      g_reset_timer.reset();
+    }
   }
   if (g_persistent_data[PFIELD::my_hostname] == "remote_temp_1")
   {

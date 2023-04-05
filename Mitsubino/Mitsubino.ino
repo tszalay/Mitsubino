@@ -12,17 +12,19 @@
 static const bool USE_HEATPUMP = true;
 
 HeatPump g_heat_pump;
-float g_temp_fudge = 0.01; // fudge temp by a tiny bit so that HA shows distinct values
+float g_fudge = 0.01; // fudge temp by a tiny bit so that HA shows distinct values
 
 SimpleTimer g_send_timer{15000}; // updates
 SimpleTimer g_log_raw_timer{60000}; // logging of raw packets, when enabled
 unsigned long g_last_remote_temp_write = 0; // less simple than SimpleTimer
+const unsigned long REMOTE_TEMP_TIMEOUT = 300*1000;
 
 void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status) {
   if (!settings.connected || status.roomTemperature == 0) {
     debug_println("Skipping send due to invalid data");
     return;
   }
+  bool sent = false;
   {
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(7));
     msg["power"] = settings.power;
@@ -36,10 +38,13 @@ void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status
     String s;
     serializeJson(msg, s);
 
-    if (!g_mqtt_client.publish(get_topic_name("settings").c_str(), s.c_str(), true))
+    if (!g_mqtt_client.publish(get_topic_name("settings").c_str(), s.c_str(), true)) {
       debug_print("Failed to publish settings change to settings topic");
-    else
+    }
+    else {
+      sent = true;
       debug_println("sent settings: ", s);
+    }
   }
 
   {
@@ -47,17 +52,20 @@ void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(3));
     msg["roomTemperature"] = status.roomTemperature;
     msg["operating"] = status.operating;
-    msg["compressorFrequency"] = status.compressorFrequency + g_temp_fudge;
+    msg["wiggle"] = g_fudge;
 
-    // invert room temp fudge for next time
-    g_temp_fudge = -g_temp_fudge;
+    // invert fudge for next time
+    g_fudge = -g_fudge;
 
     String s;
     serializeJson(msg, s);
-    if (!g_mqtt_client.publish(get_topic_name("status").c_str(), s.c_str(), true))
+    if (!g_mqtt_client.publish(get_topic_name("status").c_str(), s.c_str(), true)) {
       debug_println("failed to publish to room temp and operation status to status topic");
-    else
+    }
+    else {
+      sent = true;
       debug_println("sent status: ", s);
+    }
   }
   {
     // send the timer info
@@ -75,7 +83,10 @@ void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status
     if (!g_mqtt_client.publish(get_topic_name("timers").c_str(), s.c_str(), true))
       debug_println("failed to publish timer info to timer topic");
   }
-  g_send_timer.reset();
+  if (sent) {
+    g_send_timer.reset();
+    g_reset_timer.reset();
+  }
 }
 
 void send_hp_data() {
@@ -189,7 +200,7 @@ void loop() {
   loop_shared();
   // doesn't matter if MQTT is down, if remote temp is lost, we cancel that.
   // looks like this is an immediate write, no waiting for sync.
-  if (g_last_remote_temp_write != 0 && millis() - g_last_remote_temp_write > 120*1000) {
+  if (g_last_remote_temp_write != 0 && millis() - g_last_remote_temp_write > REMOTE_TEMP_TIMEOUT) {
     g_heat_pump.setRemoteTemperature(0);
     debug_println("Reverting to internal thermostat due to remote temp timeout");
     g_last_remote_temp_write = 0;

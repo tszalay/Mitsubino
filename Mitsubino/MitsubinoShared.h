@@ -46,20 +46,24 @@ PubSubClient g_mqtt_client(g_wifi_client);
 // timer intervals
 struct SimpleTimer {
   const int interval;
-  int next_tick{0};
-  SimpleTimer(int interval_) : interval(interval_) {}
+  unsigned long last_tick{0};
+  SimpleTimer(int _interval) : interval(_interval) {}
   bool tick() {
-    int time = millis();
-    if (time >= next_tick) {
-      next_tick = time + interval;
+    unsigned long time = millis();
+    if (time-last_tick >= interval) {
+      last_tick = time;
       return true;
     }
     return false;
   }
   void reset() {
-    next_tick = millis() + interval;
+    last_tick = millis();
   }
 };
+
+// helps us reset if we haven't sent anything in a while, since
+// ESP WDTs aren't doing it for us
+SimpleTimer g_reset_timer{120*1000};
 
 // ------------- abstracted debug print helpers -------------
 
@@ -346,7 +350,7 @@ void configure_shared() {
   // needed for compatibility with certain (my) ASUS routers
   WiFi.setPhyMode(WIFI_PHY_MODE_11G);
 #else
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11N);
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G);
 #endif
   WiFi.hostname(g_persistent_data[PFIELD::my_hostname]);
   WiFi.begin(g_persistent_data[PFIELD::ssid].c_str(), g_persistent_data[PFIELD::password].c_str());
@@ -383,9 +387,14 @@ void configure_shared() {
   g_mqtt_client.setCallback(handle_mqtt_message);
   g_mqtt_client.setBufferSize(1024);
   mqtt_connect();
+
+  g_reset_timer.reset();
 }
 
 void loop_shared() {
+  // if we haven't sent anything in a long time, just do a reset
+  if (g_reset_timer.tick())
+    ESP.restart();    
   g_server.handleClient();
   ArduinoOTA.handle();
 #ifdef ESP8266
