@@ -2,6 +2,9 @@
 // only use this code if we are compiling for the heat pumps
 #ifdef ESP8266
 
+// Partition config:
+// Flash Size 4MB, FS: 2MB, OTA ~1MB
+
 #include "MitsubinoShared.h"
 
 #include "src/HeatPump/src/HeatPump.h"      // SwiCago, submodule installed in Arduino library dir
@@ -16,8 +19,10 @@ float g_fudge = 0.01; // fudge temp by a tiny bit so that HA shows distinct valu
 
 SimpleTimer g_send_timer{15000}; // updates
 SimpleTimer g_log_raw_timer{60000}; // logging of raw packets, when enabled
+SimpleTimer g_last_settings_timer{15000}; // last time we wrote settings, for disabling callback
 unsigned long g_last_remote_temp_write = 0; // less simple than SimpleTimer
 const unsigned long REMOTE_TEMP_TIMEOUT = 300*1000;
+bool g_message_received_this_round = false;
 
 void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status) {
   if (!settings.connected || status.roomTemperature == 0) {
@@ -123,8 +128,12 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
-  if (root.containsKey("power"))
+  if (root.containsKey("power")) {
     g_heat_pump.setPowerSetting((const char*)root["power"]);
+    // reflect this back to HA right away, updating only the power field
+    // stupid requirement of HA MQTT switches but not the other entities
+    g_mqtt_client.publish(get_topic_name("settings").c_str(), message.c_str(), true);
+  }
   if (root.containsKey("mode"))
     g_heat_pump.setModeSetting(root["mode"]);
   if (root.containsKey("temperature"))
@@ -143,14 +152,12 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
     return; // packet write was immediate, no need to do anything else
   }
 
-  // send settings immediately, so that HA display can update with good response times
-  // it assumes of course that this is correct, but it should get corrected within a few
-  // seconds if something goes wrong
-  heatpumpSettings wantedSettings = g_heat_pump.getWantedSettings();
-  send_hp_data(wantedSettings, g_heat_pump.getStatus());
-
-  g_heat_pump.update();
-  debug_println("Updated heat pump");
+  // update time that disables callbacks
+  // reset send timer to give everything 15s to settle before we send back updates
+  g_last_settings_timer.reset();
+  g_send_timer.reset();
+  g_reset_timer.reset();
+  g_message_received_this_round = true;
 }
 
 void mock_heat_pump_sync() {
@@ -186,7 +193,13 @@ void setup() {
 
   // connect to the heatpump. Callbacks first so that the hpPacketDebug callback is available for connect()
   if (USE_HEATPUMP) {
-    g_heat_pump.setSettingsChangedCallback([] () { debug_println("Got external update"); send_hp_data(); });
+    g_heat_pump.setSettingsChangedCallback([] () {
+      debug_println("Got external update");
+      if (g_last_settings_timer.peek())
+        send_hp_data();
+      else
+        debug_println("Skipping update because we triggered it");
+    });
     g_heat_pump.setStatusChangedCallback([] (heatpumpStatus) { send_hp_data(); });
     g_heat_pump.setPacketCallback(hp_debug);
     g_heat_pump.setOnConnectCallback([] () { debug_println("Connected to heatpump"); });
@@ -206,8 +219,11 @@ void loop() {
     g_last_remote_temp_write = 0;
   }
   if (g_mqtt_client.connected()) {
+    g_message_received_this_round = false;
     g_mqtt_client.loop();
-    if (USE_HEATPUMP) {
+    // only call sync() if we didn't get an MQTT message this round, or else we update once
+    // per MQTT message which really slows things down for multiple button presses
+    if (USE_HEATPUMP && !g_message_received_this_round) {
       auto start = millis();
       g_heat_pump.sync();
       auto dt = millis() - start;

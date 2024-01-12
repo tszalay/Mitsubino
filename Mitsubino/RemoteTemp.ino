@@ -2,8 +2,15 @@
 
 #ifdef ESP32
 
+// Overall settings don't really matter, but to keep partition consistent:
+// Use "default 4MB SPIFFS" partition if re-flashing, don't wipe
+// Upload speed 921600, CPU 240MHz all seems to work
+
 #include "MitsubinoShared.h"
-#include <Adafruit_SHT4x.h>
+#include <Adafruit_SHT4x.h> // 1.0.4
+
+#include "esp_pm.h"
+typedef esp_pm_config_esp32s2_t esp_pm_config_t;
 
 Adafruit_SHT4x sht4{};
 SimpleTimer g_temp_timer{15000};
@@ -48,10 +55,20 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
 }
 
 void setup() {
+  Serial.begin(115200);
   // connect to wifi, mDNS, OTA, MQTT, start server, etc
   WiFi.onEvent(WiFiEvent);
   configure_shared();
   Wire1.setPins(SDA1, SCL1);
+
+  esp_pm_config_t pm_config;
+  pm_config.max_freq_mhz = 240;
+  pm_config.min_freq_mhz = 40;
+  pm_config.light_sleep_enable = false;
+  ESP_ERROR_CHECK( esp_pm_configure(&pm_config) );
+
+  //ESP_ERROR_CHECK(esp_wifi_set_inactive_time(WIFI_IF_STA, 1000));
+  //esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 }
 
 void read_sensor() {

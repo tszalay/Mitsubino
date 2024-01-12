@@ -22,8 +22,8 @@
 #include <ArduinoOTA.h>
 #include <LittleFS.h>
 #include <DNSServer.h>
-#include <ArduinoJson.h>   // ArduinoJson library v6.20.1
-#include <PubSubClient.h>  // PubSubClient library v2.8
+#include <ArduinoJson.h>   // ArduinoJson library v6.21.4
+#include <PubSubClient.h>  // PubSubClient library v2.8.0
 
 #define CONFIG_AP_NAME "Mitsubino-Config"
 
@@ -55,6 +55,10 @@ struct SimpleTimer {
       return true;
     }
     return false;
+  }
+  // can use this as a timeout instead of a timer
+  bool peek() {
+    return millis() - last_tick >= interval;
   }
   void reset() {
     last_tick = millis();
@@ -188,7 +192,7 @@ String get_topic_name(const char* subtopic) {
 /* Root page */
 const char ROOT_PAGE_BODY[] PROGMEM = R"=====(
 <!DOCTYPE html><html><body><p>
-ESP8266/32 Mitsubino Server version 1.0.0:<br>
+ESP8266/32 Mitsubino Server version 1.1.0:<br>
 <a href="config">Configuration</a><br>
 <a href="log">View log</a><br>
 <a href="restart">Restart</a><br>
