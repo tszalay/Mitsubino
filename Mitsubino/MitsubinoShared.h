@@ -15,6 +15,8 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <esp_wifi.h>
+#include "ESP32_NOW.h"
+#include <esp_mac.h>  // For the MAC2STR and MACSTR macros
 #endif
 
 #include <WiFiClient.h>
@@ -103,6 +105,12 @@ void debug_print(const T&... t) {
 template<typename... T>
 void debug_println(const T&... t) {
   debug_print(millis(), ": ", t..., "\n");
+}
+
+String mac2str(const uint8_t* mac) {
+  char macStr[18];
+  sprintf(macStr, MACSTR, MAC2STR(mac));
+  return String(macStr);
 }
 
 // ------------- persistent data save/restore helpers -------------
@@ -289,6 +297,25 @@ void start_server() {
 
 // ------------- end HTTP server code -------------
 
+// ------------- begin ESPNOW code -------------
+
+#ifndef ESP8266
+
+const uint8_t ESP_NOW_BROADCAST_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+void OnDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status) {
+  debug_println("Packet send status: ", (status == ESP_NOW_SEND_SUCCESS) ? "success" : "failure");
+}
+
+void OnDataRecv(const esp_now_recv_info_t *rx_info, const uint8_t *incomingData, int len) {
+  debug_println("Packet received from MAC: ", mac2str(rx_info->src_addr));
+  debug_println("Data received: ", String((char*)incomingData, len));
+}
+#endif
+
+// ------------- end ESPNOW code -------------
+
+
 // Set up an access point with SSID Mitsubino and PW Mitsubino
 void start_ap_and_server() {
   WiFi.mode(WIFI_STA);
@@ -392,13 +419,62 @@ void configure_shared() {
   g_mqtt_client.setBufferSize(1024);
   mqtt_connect();
 
+#ifndef ESP8266
+  // Initialize the ESP-NOW protocol
+  if (esp_now_init() != ESP_OK) {
+    debug_println("ESP-NOW failed to init");
+    //ESP.restart();
+  }
+  else {
+    debug_println("Initialized ESP-NOW");
+    uint8_t baseMac[6];
+    if (esp_wifi_get_mac(WIFI_IF_STA, baseMac) == ESP_OK) {
+      debug_println("WiFi MAC address: ", mac2str(baseMac));
+    }
+    esp_now_register_send_cb(OnDataSent);
+    esp_now_register_recv_cb(OnDataRecv);
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, ESP_NOW_BROADCAST_MAC, 6);
+    peerInfo.channel = 0; // Use channel 0 for default
+    peerInfo.encrypt = false;
+    if (esp_now_add_peer(&peerInfo) != ESP_OK){
+      debug_println("Failed to add peer");
+    }
+    else {
+      debug_println("Successfully added peer");
+    }
+  }
+
+  uint32_t esp_now_version = 1;
+  auto err = esp_now_get_version(&esp_now_version);
+  if (err != ESP_OK) {
+    esp_now_version = 1;
+  }
+  const uint32_t max_data_len = (esp_now_version == 1) ? ESP_NOW_MAX_DATA_LEN : ESP_NOW_MAX_DATA_LEN_V2;
+  debug_println("ESP-NOW version: ", esp_now_version, ", max data length: ", max_data_len);
+#endif
+
   g_reset_timer.reset();
 }
 
+SimpleTimer g_espnow_timer{5000};
+
 void loop_shared() {
   // if we haven't sent anything in a long time, just do a reset
-  if (g_reset_timer.tick())
-    ESP.restart();    
+  if (g_reset_timer.tick()) {
+    debug_println("Resetting due to g_reset_timer trip");
+    delay(5000);
+    ESP.restart();
+  }
+  if (g_espnow_timer.tick()) {
+    debug_println("Sending ESPNOW message");
+    String msg = "Hello from ";
+    msg += g_persistent_data[PFIELD::my_hostname];
+    msg += " at time " + String(millis());
+    if (esp_now_send(ESP_NOW_BROADCAST_MAC, (const uint8_t*)msg.c_str(), msg.length()+1) != ESP_OK) {
+      debug_println("esp_now_send failed!");
+    }
+  }
   g_server.handleClient();
   ArduinoOTA.handle();
 #ifdef ESP8266

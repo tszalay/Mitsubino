@@ -9,9 +9,6 @@
 #include "MitsubinoShared.h"
 #include <Adafruit_SHT4x.h> // 1.0.4
 
-#include "esp_pm.h"
-typedef esp_pm_config_esp32s2_t esp_pm_config_t;
-
 Adafruit_SHT4x sht4{};
 SimpleTimer g_temp_timer{15000};
 SimpleTimer g_mqtt_reconnect_timer{100};
@@ -54,25 +51,26 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
   debug_println("Updated heat pump");*/
 }
 
+#ifdef SDA1
+#define WIRE_TO_USE Wire1
+#define SDA_TO_USE SDA1
+#define SCL_TO_USE SCL1
+#else
+#define WIRE_TO_USE Wire
+#define SDA_TO_USE SDA
+#define SCL_TO_USE SCL
+#endif
+
 void setup() {
   Serial.begin(115200);
   // connect to wifi, mDNS, OTA, MQTT, start server, etc
   WiFi.onEvent(WiFiEvent);
   configure_shared();
-  Wire1.setPins(SDA1, SCL1);
-
-  esp_pm_config_t pm_config;
-  pm_config.max_freq_mhz = 240;
-  pm_config.min_freq_mhz = 40;
-  pm_config.light_sleep_enable = false;
-  ESP_ERROR_CHECK( esp_pm_configure(&pm_config) );
-
-  //ESP_ERROR_CHECK(esp_wifi_set_inactive_time(WIFI_IF_STA, 1000));
-  //esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+  WIRE_TO_USE.setPins(SDA_TO_USE, SCL_TO_USE);
 }
 
 void read_sensor() {
-  if (!sht4.begin(&Wire1)) {
+  if (!sht4.begin(&WIRE_TO_USE)) {
     debug_println("Couldn't find SHT4x");
   }
   else {
@@ -84,6 +82,7 @@ void read_sensor() {
   bool success = sht4.getEvent(&humidity, &temp);
   if (!success) {
     debug_println("Failed to read temp sensor");
+    g_reset_timer.reset();
     return;
   }
   
