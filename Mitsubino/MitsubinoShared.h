@@ -27,6 +27,9 @@
 #include <ArduinoJson.h>   // ArduinoJson library v6.21.4
 #include <PubSubClient.h>  // PubSubClient library v2.8.0
 
+#include "States.h"
+#include "Logger.h"
+
 #define CONFIG_AP_NAME "Mitsubino-Config"
 
 // topics are HP_TOPIC_BASE/HOSTNAME/{status,settings,timers,control}
@@ -71,47 +74,7 @@ struct SimpleTimer {
 // ESP WDTs aren't doing it for us
 SimpleTimer g_reset_timer{120*1000};
 
-// ------------- abstracted debug print helpers -------------
-
-// global where we are storing the debug log
-String g_debug_log_buffer;
-const size_t DEBUG_LOG_BUFFER_SIZE = 1024;
-
-void clear_debug_log() {
-  g_debug_log_buffer.remove(0, g_debug_log_buffer.length());
-}
-
-template<typename T>
-void _debug_print_impl(const T& t) {
-  String s(t);
-  if (s.length() + g_debug_log_buffer.length() >= (DEBUG_LOG_BUFFER_SIZE-1)) {
-    clear_debug_log();
-    g_debug_log_buffer.concat("-- truncated --\n");
-  }
-  g_debug_log_buffer.concat(s);
-}
-
-template<typename T, typename... U>
-void _debug_print_impl(const T& t, const U&... u) {
-  _debug_print_impl(t);
-  _debug_print_impl(u...);
-}
-
-template<typename... T>
-void debug_print(const T&... t) {
-  _debug_print_impl(t...);
-}
-
-template<typename... T>
-void debug_println(const T&... t) {
-  debug_print(millis(), ": ", t..., "\n");
-}
-
-String mac2str(const uint8_t* mac) {
-  char macStr[18];
-  sprintf(macStr, MACSTR, MAC2STR(mac));
-  return String(macStr);
-}
+Logger g_logger{2048};
 
 // ------------- persistent data save/restore helpers -------------
 
@@ -149,7 +112,7 @@ bool load_persistent_data(PersistentData& data) {
     String name = String(PERSISTENT_FIELD_NAMES[i]);
     File f = LittleFS.open("/" + name, "r");
     if (!f) {
-      debug_println("File ", name, " could not be read");
+      g_logger.println("File ", name, " could not be read");
       return false;
     }
     data[i] = f.readString();
@@ -169,7 +132,7 @@ bool save_persistent_data(PersistentData& data) {
     String name = String(PERSISTENT_FIELD_NAMES[i]);
     File f = LittleFS.open("/" + name, "w");
     if (!f) {
-      debug_println("File ", name, " could not be opened for write");
+      g_logger.println("File ", name, " could not be opened for write");
       return false;
     }
     f.print(data[i]);
@@ -180,7 +143,7 @@ bool save_persistent_data(PersistentData& data) {
 
 void print_persistent_data(PersistentData& data) {
   for (int i = 0; i < data.size(); i++)
-    debug_println(PERSISTENT_FIELD_NAMES[i], " = ", data[i]);
+    g_logger.println(PERSISTENT_FIELD_NAMES[i], " = ", data[i]);
 }
 
 String get_topic_name(const char* subtopic) {
@@ -250,11 +213,11 @@ void handle_persistent_save() {
   PersistentData data;
   for (int i = 0; i < data.size(); i++)
     data[i] = g_server.arg(PERSISTENT_FIELD_NAMES[i]);
-  debug_println("Received data from POST and saving to Flash:");
+  g_logger.println("Received data from POST and saving to Flash:");
   print_persistent_data(data);
   save_persistent_data(data);
   g_server.send(200, "text/html", F("Data saved, rebooting. You may need to change networks or addresses to reconnect."));
-  debug_println("Rebooting...");
+  g_logger.println("Rebooting...");
   delay(1000);
   ESP.restart();
 }
@@ -273,8 +236,8 @@ void start_server() {
   g_server.on("/save", handle_persistent_save);
   g_server.on("/log", [] () { g_server.send(200, "text/html", String(LOG_PAGE_BODY)); });
   g_server.on("/get_log", [] () {
-    g_server.send(200, "text/plain", g_debug_log_buffer);
-    clear_debug_log();
+    g_server.send(200, "text/plain", g_logger.get());
+    g_logger.clear();
   });
   g_server.on("/restart", [] () { g_server.send(200, "text/plain", "Restarting..."); ESP.restart(); });
 #ifdef ESP8266
@@ -304,12 +267,12 @@ void start_server() {
 const uint8_t ESP_NOW_BROADCAST_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 void OnDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status) {
-  debug_println("Packet send status: ", (status == ESP_NOW_SEND_SUCCESS) ? "success" : "failure");
+  g_logger.println("Packet send status: ", (status == ESP_NOW_SEND_SUCCESS) ? "success" : "failure");
 }
 
 void OnDataRecv(const esp_now_recv_info_t *rx_info, const uint8_t *incomingData, int len) {
-  debug_println("Packet received from MAC: ", mac2str(rx_info->src_addr));
-  debug_println("Data received: ", String((char*)incomingData, len));
+  g_logger.println("Packet received from MAC: ", mac2str(rx_info->src_addr));
+  g_logger.println("Data received: ", String((char*)incomingData, len));
 }
 #endif
 
@@ -323,7 +286,7 @@ void start_ap_and_server() {
   delay(100);
   WiFi.softAP(CONFIG_AP_NAME, "");
   start_server();
-  debug_println(CONFIG_AP_NAME, " wifi network started");
+  g_logger.println(CONFIG_AP_NAME, " wifi network started");
   DNSServer dnsServer;
   dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
   dnsServer.start(53, "*", WiFi.softAPIP());
@@ -337,7 +300,7 @@ void start_ap_and_server() {
     ArduinoOTA.handle();
     dnsServer.processNextRequest();
   }
-  debug_println("No client or reconfiguration received, reverting to retrying wifi connection...");
+  g_logger.println("No client or reconfiguration received, reverting to retrying wifi connection...");
   WiFi.disconnect();
 }
 
@@ -349,31 +312,22 @@ void mqtt_connect() {
   );
 
   if (ret) {
-    debug_println("MQTT client connected");
+    g_logger.println("MQTT client connected");
     g_mqtt_client.subscribe(get_topic_name("control").c_str());
   }
   else {
-    debug_println("MQTT client failed to connect, state: ", g_mqtt_client.state());
+    g_logger.println("MQTT client failed to connect, state: ", g_mqtt_client.state());
   }
 }
 
-// ESP32-specific debug handler
-#ifdef ESP32
-void WiFiEvent(WiFiEvent_t event);
-#endif
-
 void configure_shared() {
-  g_debug_log_buffer.reserve(DEBUG_LOG_BUFFER_SIZE);
   if (!load_persistent_data(g_persistent_data))
-    debug_println("Failed to fully load persistent data, still attempting to connect to WiFi:");
+    g_logger.println("Failed to fully load persistent data, still attempting to connect to WiFi:");
   else
-    debug_println("Loaded persistent data:");
+    g_logger.println("Loaded persistent data:");
   print_persistent_data(g_persistent_data);
 
   // WiFi settings
-#ifdef ESP32
-  WiFi.onEvent(WiFiEvent);
-#endif
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
   WiFi.mode(WIFI_STA);
@@ -395,7 +349,7 @@ void configure_shared() {
     delay(1000);
     // give wifi 10 minutes to boot up in case of power failure; don't wait on first boot with blank info
     if (millis()-wait_start > 10*60*1000 || g_persistent_data[PFIELD::ssid].isEmpty()) {
-      debug_println(F("Not connected in 60s or SSID is blank, serving access point with config page"));
+      g_logger.println(F("Not connected in 60s or SSID is blank, serving access point with config page"));
       // spend some 10min waiting for reconfigure connection, then keep trying to connect
       start_ap_and_server();
       // revert to connection mode and keep going
@@ -404,14 +358,15 @@ void configure_shared() {
       break;
     }
   }
-  debug_println("Connected to ", WiFi.SSID(), "\nIP address: ", WiFi.localIP().toString());
+  g_logger.println("Connected to ", WiFi.SSID());
+  g_logger.println("IP address: ", WiFi.localIP().toString());
 
   MDNS.begin(g_persistent_data[PFIELD::my_hostname].c_str());
-  debug_println("MDNS started");
+  g_logger.println("MDNS started");
   start_server();
-  debug_println("HTTP server started");
+  g_logger.println("HTTP server started");
   ArduinoOTA.begin();
-  debug_println("OTA server started");
+  g_logger.println("OTA server started");
 
   int mqtt_port = g_persistent_data[PFIELD::mqtt_port].toInt();
   g_mqtt_client.setServer(g_persistent_data[PFIELD::mqtt_hostname].c_str(), mqtt_port);
@@ -422,14 +377,14 @@ void configure_shared() {
 #ifndef ESP8266
   // Initialize the ESP-NOW protocol
   if (esp_now_init() != ESP_OK) {
-    debug_println("ESP-NOW failed to init");
+    g_logger.println("ESP-NOW failed to init");
     //ESP.restart();
   }
   else {
-    debug_println("Initialized ESP-NOW");
+    g_logger.println("Initialized ESP-NOW");
     uint8_t baseMac[6];
     if (esp_wifi_get_mac(WIFI_IF_STA, baseMac) == ESP_OK) {
-      debug_println("WiFi MAC address: ", mac2str(baseMac));
+      g_logger.println("WiFi MAC address: ", mac2str(baseMac));
     }
     esp_now_register_send_cb(OnDataSent);
     esp_now_register_recv_cb(OnDataRecv);
@@ -438,10 +393,10 @@ void configure_shared() {
     peerInfo.channel = 0; // Use channel 0 for default
     peerInfo.encrypt = false;
     if (esp_now_add_peer(&peerInfo) != ESP_OK){
-      debug_println("Failed to add peer");
+      g_logger.println("Failed to add peer");
     }
     else {
-      debug_println("Successfully added peer");
+      g_logger.println("Successfully added peer");
     }
   }
 
@@ -451,7 +406,7 @@ void configure_shared() {
     esp_now_version = 1;
   }
   const uint32_t max_data_len = (esp_now_version == 1) ? ESP_NOW_MAX_DATA_LEN : ESP_NOW_MAX_DATA_LEN_V2;
-  debug_println("ESP-NOW version: ", esp_now_version, ", max data length: ", max_data_len);
+  g_logger.println("ESP-NOW version: ", esp_now_version, ", max data length: ", max_data_len);
 #endif
 
   g_reset_timer.reset();
@@ -462,17 +417,17 @@ SimpleTimer g_espnow_timer{5000};
 void loop_shared() {
   // if we haven't sent anything in a long time, just do a reset
   if (g_reset_timer.tick()) {
-    debug_println("Resetting due to g_reset_timer trip");
+    g_logger.println("Resetting due to g_reset_timer trip");
     delay(5000);
     ESP.restart();
   }
   if (g_espnow_timer.tick()) {
-    debug_println("Sending ESPNOW message");
+    g_logger.println("Sending ESPNOW message");
     String msg = "Hello from ";
     msg += g_persistent_data[PFIELD::my_hostname];
     msg += " at time " + String(millis());
     if (esp_now_send(ESP_NOW_BROADCAST_MAC, (const uint8_t*)msg.c_str(), msg.length()+1) != ESP_OK) {
-      debug_println("esp_now_send failed!");
+      g_logger.println("esp_now_send failed!");
     }
   }
   g_server.handleClient();
@@ -484,95 +439,3 @@ void loop_shared() {
   // and nothing we do really needs to happen that fast
   delay(50);
 }
-
-#ifdef ESP32
-void WiFiEvent(WiFiEvent_t event)
-{
-    debug_println("[WiFi-event] event: ", event);
-
-    switch (event) {
-        case ARDUINO_EVENT_WIFI_READY:
-            debug_println("WiFi interface ready");
-            break;
-        case ARDUINO_EVENT_WIFI_SCAN_DONE:
-            debug_println("Completed scan for access points");
-            break;
-        case ARDUINO_EVENT_WIFI_STA_START:
-            debug_println("WiFi client started");
-            break;
-        case ARDUINO_EVENT_WIFI_STA_STOP:
-            debug_println("WiFi clients stopped");
-            break;
-        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
-            debug_println("Connected to access point");
-            break;
-        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-            debug_println("Disconnected from WiFi access point");
-            break;
-        case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:
-            debug_println("Authentication mode of access point has changed");
-            break;
-        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-            debug_println("Obtained IP address: ", WiFi.localIP());
-            break;
-        case ARDUINO_EVENT_WIFI_STA_LOST_IP:
-            debug_println("Lost IP address and IP address is reset to 0");
-            break;
-        case ARDUINO_EVENT_WPS_ER_SUCCESS:
-            debug_println("WiFi Protected Setup (WPS): succeeded in enrollee mode");
-            break;
-        case ARDUINO_EVENT_WPS_ER_FAILED:
-            debug_println("WiFi Protected Setup (WPS): failed in enrollee mode");
-            break;
-        case ARDUINO_EVENT_WPS_ER_TIMEOUT:
-            debug_println("WiFi Protected Setup (WPS): timeout in enrollee mode");
-            break;
-        case ARDUINO_EVENT_WPS_ER_PIN:
-            debug_println("WiFi Protected Setup (WPS): pin code in enrollee mode");
-            break;
-        case ARDUINO_EVENT_WIFI_AP_START:
-            debug_println("WiFi access point started");
-            break;
-        case ARDUINO_EVENT_WIFI_AP_STOP:
-            debug_println("WiFi access point  stopped");
-            break;
-        case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
-            debug_println("Client connected");
-            break;
-        case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
-            debug_println("Client disconnected");
-            break;
-        case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
-            debug_println("Assigned IP address to client");
-            break;
-        case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED:
-            debug_println("Received probe request");
-            break;
-        case ARDUINO_EVENT_WIFI_AP_GOT_IP6:
-            debug_println("AP IPv6 is preferred");
-            break;
-        case ARDUINO_EVENT_WIFI_STA_GOT_IP6:
-            debug_println("STA IPv6 is preferred");
-            break;
-        case ARDUINO_EVENT_ETH_GOT_IP6:
-            debug_println("Ethernet IPv6 is preferred");
-            break;
-        case ARDUINO_EVENT_ETH_START:
-            debug_println("Ethernet started");
-            break;
-        case ARDUINO_EVENT_ETH_STOP:
-            debug_println("Ethernet stopped");
-            break;
-        case ARDUINO_EVENT_ETH_CONNECTED:
-            debug_println("Ethernet connected");
-            break;
-        case ARDUINO_EVENT_ETH_DISCONNECTED:
-            debug_println("Ethernet disconnected");
-            break;
-        case ARDUINO_EVENT_ETH_GOT_IP:
-            debug_println("Obtained IP address");
-            break;
-        default: break;
-    }
-}
-#endif

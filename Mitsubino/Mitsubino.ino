@@ -26,7 +26,7 @@ bool g_message_received_this_round = false;
 
 void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status) {
   if (!settings.connected || status.roomTemperature == 0) {
-    debug_println("Skipping send due to invalid data");
+    g_logger.println("Skipping send due to invalid data");
     return;
   }
   bool sent = false;
@@ -44,11 +44,11 @@ void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status
     serializeJson(msg, s);
 
     if (!g_mqtt_client.publish(get_topic_name("settings").c_str(), s.c_str(), true)) {
-      debug_print("Failed to publish settings change to settings topic");
+      g_logger.print("Failed to publish settings change to settings topic");
     }
     else {
       sent = true;
-      debug_println("sent settings: ", s);
+      g_logger.println("sent settings: ", s);
     }
   }
 
@@ -65,11 +65,11 @@ void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status
     String s;
     serializeJson(msg, s);
     if (!g_mqtt_client.publish(get_topic_name("status").c_str(), s.c_str(), true)) {
-      debug_println("failed to publish to room temp and operation status to status topic");
+      g_logger.println("failed to publish to room temp and operation status to status topic");
     }
     else {
       sent = true;
-      debug_println("sent status: ", s);
+      g_logger.println("sent status: ", s);
     }
   }
   {
@@ -86,7 +86,7 @@ void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status
     serializeJson(msg, s);
 
     if (!g_mqtt_client.publish(get_topic_name("timers").c_str(), s.c_str(), true))
-      debug_println("failed to publish timer info to timer topic");
+      g_logger.println("failed to publish timer info to timer topic");
   }
   if (sent) {
     g_send_timer.reset();
@@ -101,30 +101,30 @@ void send_hp_data() {
 void hp_debug(byte* packet, unsigned int length, char* packetDirection) {
   if (String(packetDirection) == String("packetSent") || !g_log_raw_timer.tick())
     return;
-  debug_println("Heatpump packet of length ", length, " with direction ", packetDirection);
+  g_logger.println("Heatpump packet of length ", length, " with direction ", packetDirection);
   for (int idx = 0; idx < length; idx++) {
     if (packet[idx] < 16)
-      debug_print("0"); // pad single hex digits with a 0
-    debug_print(String(packet[idx], HEX), " ");
+      g_logger.print("0"); // pad single hex digits with a 0
+    g_logger.print(String(packet[idx], HEX), " ");
   }
-  debug_print("\n");
+  g_logger.print("\n");
 }
 
 void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
   if (String(topic) != get_topic_name("control")) {
-    debug_println("Received message at unrecognized topic: ", topic);
+    g_logger.println("Received message at unrecognized topic: ", topic);
     return;
   }
 
   // this is probably fine
   String message;
   message.concat((const char*)payload, length);
-  debug_println("Got MQTT message on topic ", topic, ": ", message);
+  g_logger.println("Got MQTT message on topic ", topic, ": ", message);
   DynamicJsonDocument root(JSON_OBJECT_SIZE(6));
   DeserializationError error = deserializeJson(root, message.c_str());
 
   if (error) {
-    debug_println("Error parsing received mqtt message: ", error.c_str());
+    g_logger.println("Error parsing received mqtt message: ", error.c_str());
     return;
   }
 
@@ -147,7 +147,7 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
   if (root.containsKey("remoteTemp")) {
     float remote_temp = root["remoteTemp"];
     g_heat_pump.setRemoteTemperature(remote_temp);
-    debug_println("remote temp set to ", remote_temp);
+    g_logger.println("remote temp set to ", remote_temp);
     g_last_remote_temp_write = millis();
     return; // packet write was immediate, no need to do anything else
   }
@@ -194,15 +194,15 @@ void setup() {
   // connect to the heatpump. Callbacks first so that the hpPacketDebug callback is available for connect()
   if (USE_HEATPUMP) {
     g_heat_pump.setSettingsChangedCallback([] () {
-      debug_println("Got external update");
+      g_logger.println("Got external update");
       if (g_last_settings_timer.peek())
         send_hp_data();
       else
-        debug_println("Skipping update because we triggered it");
+        g_logger.println("Skipping update because we triggered it");
     });
     g_heat_pump.setStatusChangedCallback([] (heatpumpStatus) { send_hp_data(); });
     g_heat_pump.setPacketCallback(hp_debug);
-    g_heat_pump.setOnConnectCallback([] () { debug_println("Connected to heatpump"); });
+    g_heat_pump.setOnConnectCallback([] () { g_logger.println("Connected to heatpump"); });
     g_heat_pump.enableExternalUpdate(); // IR remote settings will take effect
     g_heat_pump.enableAutoUpdate(); // calling sync() will propagate setSettings() call
     g_heat_pump.connect(&Serial);
@@ -215,7 +215,7 @@ void loop() {
   // looks like this is an immediate write, no waiting for sync.
   if (g_last_remote_temp_write != 0 && millis() - g_last_remote_temp_write > REMOTE_TEMP_TIMEOUT) {
     g_heat_pump.setRemoteTemperature(0);
-    debug_println("Reverting to internal thermostat due to remote temp timeout");
+    g_logger.println("Reverting to internal thermostat due to remote temp timeout");
     g_last_remote_temp_write = 0;
   }
   if (g_mqtt_client.connected()) {
@@ -228,7 +228,7 @@ void loop() {
       g_heat_pump.sync();
       auto dt = millis() - start;
       if (dt > 2000)
-        debug_println("Sync took ", dt, " ms");
+        g_logger.println("Sync took ", dt, " ms");
       // send status every so often, if sync didn't already do it for us due to a change
       if (g_send_timer.tick())
         send_hp_data();
@@ -238,7 +238,7 @@ void loop() {
     }
   }
   else {
-    debug_println("MQTT disconnected, attempting reconnect...");
+    g_logger.println("MQTT disconnected, attempting reconnect...");
     mqtt_connect();
   }
 }

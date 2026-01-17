@@ -16,19 +16,19 @@ int g_mqtt_reconnect_attempts = 0;
 
 void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
   /*if (String(topic) != get_topic_name("control")) {
-    debug_println("Received message at unrecognized topic: ", topic);
+    g_logger.println("Received message at unrecognized topic: ", topic);
     return;
   }*/
 
   // this is probably fine
   String message;
   message.concat((const char*)payload, length);
-  debug_println("Got MQTT message on topic ", topic, ": ", message);
+  g_logger.println("Got MQTT message on topic ", topic, ": ", message);
   /*DynamicJsonDocument root(JSON_OBJECT_SIZE(6));
   DeserializationError error = deserializeJson(root, message.c_str());
 
   if (error) {
-    debug_println("Error parsing received mqtt message: ", error.c_str());
+    g_logger.println("Error parsing received mqtt message: ", error.c_str());
     return;
   }
 
@@ -48,7 +48,7 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
     g_heat_pump.setRemoteTemperature(root["remoteTemp"]);
 
   g_heat_pump.update();
-  debug_println("Updated heat pump");*/
+  g_logger.println("Updated heat pump");*/
 }
 
 #ifdef SDA1
@@ -64,24 +64,28 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
 void setup() {
   Serial.begin(115200);
   // connect to wifi, mDNS, OTA, MQTT, start server, etc
-  WiFi.onEvent(WiFiEvent);
   configure_shared();
   WIRE_TO_USE.setPins(SDA_TO_USE, SCL_TO_USE);
+  WiFi.setSleep(false);
 }
 
 void read_sensor() {
+  g_logger.println("Free RAM: ", ESP.getFreeHeap());
+  float uptime = millis();
+  uptime /= (1000 * 60 * 60 * 24);
+  g_logger.println("Uptime: ", uptime, " days");
   if (!sht4.begin(&WIRE_TO_USE)) {
-    debug_println("Couldn't find SHT4x");
+    g_logger.println("Couldn't find SHT4x");
   }
   else {
     sht4.setPrecision(SHT4X_HIGH_PRECISION);
-    debug_println(F("SHT4x sensor connected and set to high precision"));
+    g_logger.println(F("SHT4x sensor connected and set to high precision"));
   }
 
   sensors_event_t humidity, temp;
   bool success = sht4.getEvent(&humidity, &temp);
   if (!success) {
-    debug_println("Failed to read temp sensor");
+    g_logger.println("Failed to read temp sensor");
     g_reset_timer.reset();
     return;
   }
@@ -97,10 +101,10 @@ void read_sensor() {
     // don't retain these readings, so that the heat pump unit can fallback to
     // internal thermostat if they stop sending for some reason
     if (!g_mqtt_client.publish(get_topic_name("reading").c_str(), s.c_str(), false)) {
-      debug_println("Failed to publish sensor readings to reading topic");
+      g_logger.println("Failed to publish sensor readings to reading topic");
     }
     else {
-      debug_println("sent reading: ", s);
+      g_logger.println("sent reading: ", s);
       g_reset_timer.reset();
     }
   }
@@ -110,11 +114,11 @@ void read_sensor() {
     msg["remoteTemp"] = temp.temperature;
     String s;
     serializeJson(msg, s);
-    debug_println("sending control setting: ", s);
+    g_logger.println("sending control setting: ", s);
     if (!g_mqtt_client.publish("heatpumps/hp_livingroom/control", s.c_str(), false))
-      debug_println("Failed to publish sensor readings to living room control topic");
+      g_logger.println("Failed to publish sensor readings to living room control topic");
     if (!g_mqtt_client.publish("heatpumps/hp_kitchen/control", s.c_str(), false))
-      debug_println("Failed to publish sensor readings to kitchen control topic");
+      g_logger.println("Failed to publish sensor readings to kitchen control topic");
   }
 
 }
@@ -124,10 +128,10 @@ void loop() {
 
   // crappy ad-hoc disconnect state machine. ESP8266 is much better at this.
   if (WiFi.status() != WL_CONNECTED) {
-    debug_println("WiFi disconnected, attempting reconnect");
+    g_logger.println("WiFi disconnected, attempting reconnect");
     WiFi.disconnect();
     WiFi.reconnect();
-    debug_println("Reconnect attempt complete, current status ", WiFi.status());
+    g_logger.println("Reconnect attempt complete, current status ", WiFi.status());
     for (int i=0; i<10; i++) {
       if (WiFi.status() == WL_CONNECTED)
         break;
@@ -136,7 +140,9 @@ void loop() {
     return;
   }
 
-  if (g_mqtt_client.connected()) {
+  g_reset_timer.reset();
+
+  /*if (g_mqtt_client.connected()) {
     g_mqtt_reconnect_attempts = 0;
     g_mqtt_client.loop();
     if (g_temp_timer.tick())
@@ -144,7 +150,7 @@ void loop() {
   }
   else if (g_mqtt_reconnect_timer.tick() && !g_persistent_data[PFIELD::mqtt_hostname].isEmpty()) {
     if (g_mqtt_reconnect_attempts < 10) {
-      debug_println("MQTT disconnected, attempting reconnect...");
+      g_logger.println("MQTT disconnected, attempting reconnect...");
       mqtt_connect();
       g_mqtt_reconnect_attempts++;
     }
@@ -152,7 +158,7 @@ void loop() {
       g_mqtt_reconnect_attempts = 0;
       WiFi.disconnect();
     }
-  }
+  }*/
 }
 
 #endif
