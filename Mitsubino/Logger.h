@@ -1,8 +1,11 @@
 #pragma once
 
+#include <Arduino.h>
+
 class Logger {
   String buffer_;
   const size_t capacity_;
+  bool use_serial_{false};
 
   template<typename T>
   void print_impl(const T& t) {
@@ -12,6 +15,8 @@ class Logger {
       buffer_.concat("-- truncated --\n");
     }
     buffer_.concat(s);
+    if (use_serial_)
+      Serial.print(s);
   }
 
   template<typename T, typename... U>
@@ -23,6 +28,10 @@ class Logger {
 public:
   Logger(size_t capacity) : capacity_(capacity) {
     buffer_.reserve(capacity);
+  }
+
+  void set_serial(bool use_serial) {
+    use_serial_ = use_serial;
   }
 
   void clear() {

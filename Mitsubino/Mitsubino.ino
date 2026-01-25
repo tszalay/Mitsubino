@@ -1,126 +1,53 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include <esp_wifi.h>
+#include "ESP32_NOW.h"
+#include <esp_now.h>
+#include <esp_mac.h>  // For the MAC2STR and MACSTR macros
 
-// only use this code if we are compiling for the heat pumps
-#ifdef ESP8266
+#include <WiFiClient.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+#include <DNSServer.h>
+#include <ArduinoJson.h>   // ArduinoJson library v6.21.4
+#include <PubSubClient.h>  // PubSubClient library v2.8.0
+#include <Adafruit_SHT4x.h> // 1.0.4
 
-// Partition config:
-// Flash Size 4MB, FS: 2MB, OTA ~1MB
+#include "Logger.h"
+#include "PersistentData.h"
+#include "WifiStates.h"
+#include "MQTTClient.h"
+#include "HTTPConfigServer.h"
 
-#include "MitsubinoShared.h"
+#ifdef ESP32
 
-#include "src/HeatPump/src/HeatPump.h"      // SwiCago, submodule installed in Arduino library dir
+// Overall settings don't really matter, but to keep partition consistent:
+// Use "default 4MB SPIFFS" partition if re-flashing, don't wipe
+// Upload speed 921600, CPU 240MHz all seems to work
 
-// whether we are plugged into USB or the heat pump.
-// this is compile-time const because if we reconnect to the USB serial
-// we may as well re-flash, ESP8266 only has one real serial port.
-static const bool USE_HEATPUMP = true;
 
-HeatPump g_heat_pump;
-float g_fudge = 0.01; // fudge temp by a tiny bit so that HA shows distinct values
+Logger g_logger{2048};
+PersistentData g_persistent_data(&g_logger);
 
-SimpleTimer g_send_timer{15000}; // updates
-SimpleTimer g_log_raw_timer{60000}; // logging of raw packets, when enabled
-SimpleTimer g_last_settings_timer{15000}; // last time we wrote settings, for disabling callback
-unsigned long g_last_remote_temp_write = 0; // less simple than SimpleTimer
-const unsigned long REMOTE_TEMP_TIMEOUT = 300*1000;
-bool g_message_received_this_round = false;
+WifiClientStateMachine* g_wifi = nullptr;
+MQTTStateMachine* g_mqtt = nullptr;
+HTTPConfigServer* g_server = nullptr;
 
-void send_hp_data(const heatpumpSettings& settings, const heatpumpStatus& status) {
-  if (!settings.connected || status.roomTemperature == 0) {
-    g_logger.println("Skipping send due to invalid data");
-    return;
-  }
-  bool sent = false;
-  {
-    DynamicJsonDocument msg(JSON_OBJECT_SIZE(7));
-    msg["power"] = settings.power;
-    msg["mode"] = settings.mode;
-    msg["temperature"] = settings.temperature;
-    msg["fan"] = settings.fan;
-    msg["vane"] = settings.vane;
-    msg["wideVane"] = settings.wideVane;
-    msg["connected"] = settings.connected;
-
-    String s;
-    serializeJson(msg, s);
-
-    if (!g_mqtt_client.publish(get_topic_name("settings").c_str(), s.c_str(), true)) {
-      g_logger.print("Failed to publish settings change to settings topic");
-    }
-    else {
-      sent = true;
-      g_logger.println("sent settings: ", s);
-    }
-  }
-
-  {
-    // send room temp and operating info
-    DynamicJsonDocument msg(JSON_OBJECT_SIZE(3));
-    msg["roomTemperature"] = status.roomTemperature;
-    msg["operating"] = status.operating;
-    msg["wiggle"] = g_fudge;
-
-    // invert fudge for next time
-    g_fudge = -g_fudge;
-
-    String s;
-    serializeJson(msg, s);
-    if (!g_mqtt_client.publish(get_topic_name("status").c_str(), s.c_str(), true)) {
-      g_logger.println("failed to publish to room temp and operation status to status topic");
-    }
-    else {
-      sent = true;
-      g_logger.println("sent status: ", s);
-    }
-  }
-  {
-    // send the timer info
-    DynamicJsonDocument msg(JSON_OBJECT_SIZE(5));
-
-    msg["mode"] = status.timers.mode;
-    msg["onMins"] = status.timers.onMinutesSet;
-    msg["onRemainMins"] = status.timers.onMinutesRemaining;
-    msg["offMins"] = status.timers.offMinutesSet;
-    msg["offRemainMins"] = status.timers.offMinutesRemaining;
-
-    String s;
-    serializeJson(msg, s);
-
-    if (!g_mqtt_client.publish(get_topic_name("timers").c_str(), s.c_str(), true))
-      g_logger.println("failed to publish timer info to timer topic");
-  }
-  if (sent) {
-    g_send_timer.reset();
-    g_reset_timer.reset();
-  }
-}
-
-void send_hp_data() {
-  send_hp_data(g_heat_pump.getSettings(), g_heat_pump.getStatus());
-}
-
-void hp_debug(byte* packet, unsigned int length, char* packetDirection) {
-  if (String(packetDirection) == String("packetSent") || !g_log_raw_timer.tick())
-    return;
-  g_logger.println("Heatpump packet of length ", length, " with direction ", packetDirection);
-  for (int idx = 0; idx < length; idx++) {
-    if (packet[idx] < 16)
-      g_logger.print("0"); // pad single hex digits with a 0
-    g_logger.print(String(packet[idx], HEX), " ");
-  }
-  g_logger.print("\n");
-}
+Adafruit_SHT4x sht4{};
+SimpleTimer g_temp_timer{15000};
 
 void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
-  if (String(topic) != get_topic_name("control")) {
+  /*if (String(topic) != get_topic_name("control")) {
     g_logger.println("Received message at unrecognized topic: ", topic);
     return;
-  }
+  }*/
 
   // this is probably fine
   String message;
   message.concat((const char*)payload, length);
   g_logger.println("Got MQTT message on topic ", topic, ": ", message);
-  DynamicJsonDocument root(JSON_OBJECT_SIZE(6));
+  /*DynamicJsonDocument root(JSON_OBJECT_SIZE(6));
   DeserializationError error = deserializeJson(root, message.c_str());
 
   if (error) {
@@ -128,12 +55,8 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
-  if (root.containsKey("power")) {
+  if (root.containsKey("power"))
     g_heat_pump.setPowerSetting((const char*)root["power"]);
-    // reflect this back to HA right away, updating only the power field
-    // stupid requirement of HA MQTT switches but not the other entities
-    g_mqtt_client.publish(get_topic_name("settings").c_str(), message.c_str(), true);
-  }
   if (root.containsKey("mode"))
     g_heat_pump.setModeSetting(root["mode"]);
   if (root.containsKey("temperature"))
@@ -144,103 +67,174 @@ void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
     g_heat_pump.setVaneSetting(root["vane"]);
   if (root.containsKey("wideVane"))
     g_heat_pump.setWideVaneSetting(root["wideVane"]);
-  if (root.containsKey("remoteTemp")) {
-    float remote_temp = root["remoteTemp"];
-    g_heat_pump.setRemoteTemperature(remote_temp);
-    g_logger.println("remote temp set to ", remote_temp);
-    g_last_remote_temp_write = millis();
-    return; // packet write was immediate, no need to do anything else
+  if (root.containsKey("remoteTemp"))
+    g_heat_pump.setRemoteTemperature(root["remoteTemp"]);
+
+  g_heat_pump.update();
+  g_logger.println("Updated heat pump");*/
+}
+
+#ifdef SDA1
+#define WIRE_TO_USE Wire1
+#define SDA_TO_USE SDA1
+#define SCL_TO_USE SCL1
+#else
+#define WIRE_TO_USE Wire
+#define SDA_TO_USE SDA
+#define SCL_TO_USE SCL
+#endif
+
+
+const uint8_t ESP_NOW_BROADCAST_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// we are using manual encryption because broadcast mode doesn't support encryption
+static const char* ESP_NOW_MANUAL_KEY = "Bite my shiny metal ass";
+
+void OnDataSent(const esp_now_send_info_t *tx_info, esp_now_send_status_t status) {
+  g_logger.println("Packet send status: ", (status == ESP_NOW_SEND_SUCCESS) ? "success" : "failure");
+}
+
+void OnDataRecv(const esp_now_recv_info_t *rx_info, const uint8_t *incomingData, int len) {
+  String msg((const char*)incomingData, len);
+  esp_now_manual_xor(msg);
+  g_logger.println("Packet received from MAC: ", mac2str(rx_info->src_addr));
+  g_logger.println("Data received: ", msg);
+}
+
+void esp_now_manual_xor(String& msg) {
+  const char* k = ESP_NOW_MANUAL_KEY;
+  for (char& c : msg) {
+    c ^= *k;
+    if (++k == 0)
+      k = ESP_NOW_MANUAL_KEY;
   }
-
-  // update time that disables callbacks
-  // reset send timer to give everything 15s to settle before we send back updates
-  g_last_settings_timer.reset();
-  g_send_timer.reset();
-  g_reset_timer.reset();
-  g_message_received_this_round = true;
 }
 
-void mock_heat_pump_sync() {
-  if (!g_send_timer.tick())
-    return;
-  heatpumpStatus status;
-  heatpumpSettings settings;
-  status.compressorFrequency = millis() % 150;
-  status.roomTemperature = (float)(millis() % 55);
-  status.operating = true;
-  status.timers.mode = "FOOBAR";
-  settings.mode = "AUTOBOT";
-  settings.connected = true;
-  settings.fan = "fan";
-  settings.wideVane = "wv";
-  settings.vane = millis() % 3 ? "low" : "high";
-  settings.temperature = 22.3f + (millis() % 10);
-  settings.power = "on";
-  send_hp_data(settings, status);
-}
 
 void setup() {
-  // Serial is either hooked up to heatpump or USB
-  if (!USE_HEATPUMP) {
-    Serial.begin(115200);
-    Serial.println("");
-  }
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);
+  Serial.begin(115200);
+  g_logger.set_serial(true);  
 
-  // connect to wifi, mDNS, OTA, MQTT, start server, etc
-  configure_shared();
+  if (!g_persistent_data.load())
+    g_logger.println("Failed to fully load persistent data, still attempting to connect to WiFi:");
+  else
+    g_logger.println("Loaded persistent data:");
+  g_persistent_data.print();
 
-  // connect to the heatpump. Callbacks first so that the hpPacketDebug callback is available for connect()
-  if (USE_HEATPUMP) {
-    g_heat_pump.setSettingsChangedCallback([] () {
-      g_logger.println("Got external update");
-      if (g_last_settings_timer.peek())
-        send_hp_data();
-      else
-        g_logger.println("Skipping update because we triggered it");
-    });
-    g_heat_pump.setStatusChangedCallback([] (heatpumpStatus) { send_hp_data(); });
-    g_heat_pump.setPacketCallback(hp_debug);
-    g_heat_pump.setOnConnectCallback([] () { g_logger.println("Connected to heatpump"); });
-    g_heat_pump.enableExternalUpdate(); // IR remote settings will take effect
-    g_heat_pump.enableAutoUpdate(); // calling sync() will propagate setSettings() call
-    g_heat_pump.connect(&Serial);
-  }
-}
+  g_wifi = new WifiClientStateMachine(&g_logger, g_persistent_data.my_hostname, g_persistent_data.ssid, g_persistent_data.password);
 
-void loop() {
-  loop_shared();
-  // doesn't matter if MQTT is down, if remote temp is lost, we cancel that.
-  // looks like this is an immediate write, no waiting for sync.
-  if (g_last_remote_temp_write != 0 && millis() - g_last_remote_temp_write > REMOTE_TEMP_TIMEOUT) {
-    g_heat_pump.setRemoteTemperature(0);
-    g_logger.println("Reverting to internal thermostat due to remote temp timeout");
-    g_last_remote_temp_write = 0;
-  }
-  if (g_mqtt_client.connected()) {
-    g_message_received_this_round = false;
-    g_mqtt_client.loop();
-    // only call sync() if we didn't get an MQTT message this round, or else we update once
-    // per MQTT message which really slows things down for multiple button presses
-    if (USE_HEATPUMP && !g_message_received_this_round) {
-      auto start = millis();
-      g_heat_pump.sync();
-      auto dt = millis() - start;
-      if (dt > 2000)
-        g_logger.println("Sync took ", dt, " ms");
-      // send status every so often, if sync didn't already do it for us due to a change
-      if (g_send_timer.tick())
-        send_hp_data();
-    }
-    else {
-      mock_heat_pump_sync();
-    }
+  ArduinoOTA.setPort(8266);
+  ArduinoOTA.setHostname(g_persistent_data.my_hostname.c_str());
+
+  MDNS.begin(g_persistent_data.my_hostname.c_str());
+  g_server = new HTTPConfigServer(&g_logger, &g_persistent_data);
+  ArduinoOTA.begin();
+
+  // Initialize the ESP-NOW protocol
+  if (esp_now_init() != ESP_OK) {
+    g_logger.println("ESP-NOW failed to init");
+    //ESP.restart();
   }
   else {
-    g_logger.println("MQTT disconnected, attempting reconnect...");
-    mqtt_connect();
+    g_logger.println("Initialized ESP-NOW");
+    uint8_t baseMac[6];
+    if (esp_wifi_get_mac(WIFI_IF_STA, baseMac) == ESP_OK) {
+      g_logger.println("WiFi MAC address: ", mac2str(baseMac));
+    }
+    esp_now_register_send_cb(OnDataSent);
+    esp_now_register_recv_cb(OnDataRecv);
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, ESP_NOW_BROADCAST_MAC, 6);
+    peerInfo.channel = 0; // Use channel 0 for default
+    peerInfo.encrypt = false;
+    auto ret = esp_now_add_peer(&peerInfo);
+    if (ret == ESP_OK)
+      g_logger.println("Successfully added peer");
+    else
+      g_logger.println("Failed to add peer: ", ret);
   }
+
+
+  uint32_t esp_now_version = 1;
+  auto err = esp_now_get_version(&esp_now_version);
+  if (err != ESP_OK) {
+    esp_now_version = 1;
+  }
+  const uint32_t max_data_len = (esp_now_version == 1) ? ESP_NOW_MAX_DATA_LEN : ESP_NOW_MAX_DATA_LEN_V2;
+  g_logger.println("ESP-NOW version: ", esp_now_version, ", max data length: ", max_data_len);
+
+  WIRE_TO_USE.setPins(SDA_TO_USE, SCL_TO_USE);
+}
+
+
+void read_sensor() {
+  g_logger.println("Free RAM: ", ESP.getFreeHeap());
+  float uptime = millis();
+  uptime /= (1000 * 60 * 60 * 24);
+  g_logger.println("Uptime: ", uptime, " days");
+  if (!sht4.begin(&WIRE_TO_USE)) {
+    g_logger.println("Couldn't find SHT4x");
+  }
+  else {
+    sht4.setPrecision(SHT4X_HIGH_PRECISION);
+    g_logger.println(F("SHT4x sensor connected and set to high precision"));
+  }
+
+  sensors_event_t humidity, temp;
+  bool success = sht4.getEvent(&humidity, &temp);
+  if (!success) {
+    g_logger.println("Failed to read temp sensor");
+    return;
+  }
+  
+  {
+    DynamicJsonDocument msg(JSON_OBJECT_SIZE(2));
+    msg["temperature"] = temp.temperature;
+    msg["humidity"] = humidity.relative_humidity;
+
+    String s;
+    serializeJson(msg, s);
+
+    // don't retain these readings, so that the heat pump unit can fallback to
+    // internal thermostat if they stop sending for some reason
+    //if (!g_mqtt_client.publish(get_topic_name("reading").c_str(), s.c_str(), false)) {
+    //  g_logger.println("Failed to publish sensor readings to reading topic");
+    //}
+    //else {
+    //  g_logger.println("sent reading: ", s);
+    //}
+  }
+  if (g_persistent_data.my_hostname == "remote_temp_1")
+  {
+    DynamicJsonDocument msg(JSON_OBJECT_SIZE(1));
+    msg["remoteTemp"] = temp.temperature;
+    String s;
+    serializeJson(msg, s);
+    g_logger.println("sending control setting: ", s);
+    //if (!g_mqtt_client.publish("heatpumps/hp_livingroom/control", s.c_str(), false))
+    //  g_logger.println("Failed to publish sensor readings to living room control topic");
+    //if (!g_mqtt_client.publish("heatpumps/hp_kitchen/control", s.c_str(), false))
+    //  g_logger.println("Failed to publish sensor readings to kitchen control topic");
+  }
+
+}
+
+SimpleTimer g_espnow_timer{5000};
+
+void loop() {
+  if (g_espnow_timer.tick()) {
+    g_logger.println("Sending ESPNOW message");
+    String msg = "Hello from ";
+    msg += g_persistent_data.my_hostname;
+    msg += " at time " + String(millis());
+    esp_now_manual_xor(msg);
+    if (esp_now_send(ESP_NOW_BROADCAST_MAC, (const uint8_t*)msg.c_str(), msg.length()+1) != ESP_OK) {
+      g_logger.println("esp_now_send failed!");
+    }
+  }
+  g_wifi->loop();
+  g_server->loop();
+  ArduinoOTA.handle();
 }
 
 #endif

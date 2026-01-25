@@ -1,6 +1,31 @@
 #pragma once
 
+#ifdef ESP8266
+#include <ESP8266WebServer.h>
+#else
 #include <WiFi.h>
+#endif
+
+struct SimpleTimer {
+  const int interval;
+  unsigned long last_tick{0};
+  SimpleTimer(int _interval) : interval(_interval) {}
+  bool tick() {
+    unsigned long time = millis();
+    if (time-last_tick >= interval) {
+      last_tick = time;
+      return true;
+    }
+    return false;
+  }
+  // can use this as a timeout instead of a timer
+  bool peek() {
+    return millis() - last_tick >= interval;
+  }
+  void reset() {
+    last_tick = millis();
+  }
+};
 
 template <typename T, typename STATES>
 class CRTPStateMachine {
@@ -34,7 +59,6 @@ public:
     state_ = new_state;
     time_in_state_ = 0;
     last_tick_ = millis();
-    derived()->onTransition(old_state, new_state);
   }
 
   void loop() {
@@ -44,57 +68,3 @@ public:
     derived()->loopImpl();
   }
 };
-
-enum class WifiStates : int {
-  DISCONNECTED,
-  CONNECTING,
-  CONNECTED,
-};
-
-class WifiClientStateMachine : public CRTPStateMachine<WifiClientStateMachine, WifiStates> {
-public:
-  using CRTPStateMachine::state_t;
-
-  WifiClientStateMachine(String hostname, String ssid, String password) {
-    WiFi.persistent(false);
-    WiFi.setAutoReconnect(true);
-    WiFi.mode(WIFI_STA);
-    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G);
-    WiFi.hostname(hostname);
-    WiFi.begin(ssid, password);
-  }
-
-  static constexpr state_t initial_state = state_t::CONNECTING;
-
-  void onTransition(state_t oldstate, state_t newstate) {
-
-  }
-
-  void loopImpl() {
-    switch (state()) {
-      case state_t::CONNECTED:
-        if (WiFi.status() != WL_CONNECTED) {
-          transition(state_t::DISCONNECTED);
-        }
-        return;
-      case state_t::CONNECTING:
-        if (time_in_state() > 100 && WiFi.status() == WL_CONNECTED) {
-          transition(state_t::CONNECTED);
-        }
-        else if (time_in_state() > 120*1000) {
-          ESP.restart(); // RIP
-        }
-        return;
-      case state_t::DISCONNECTED:
-        // if we just disconnected, give it some time first
-        if (time_in_state() > 100) {
-          WiFi.begin();
-          transition(state_t::CONNECTING);
-        }
-        return;
-    }
-  }
-};
-
-
-
