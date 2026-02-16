@@ -1,6 +1,8 @@
 #pragma once
 
 #include <WiFi.h>
+#include <ArduinoJson.h>   // ArduinoJson library v6.21.4
+#include <PubSubClient.h>  // PubSubClient library v2.8.0
 
 #include "States.h"
 

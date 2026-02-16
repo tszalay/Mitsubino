@@ -48,6 +48,10 @@ public:
     return state_;
   }
 
+  int istate() const {
+    return (int)state_;
+  }
+
   uint64_t time_in_state() {
     return time_in_state_;
   }

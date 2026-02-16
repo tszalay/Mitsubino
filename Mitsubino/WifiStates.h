@@ -4,6 +4,7 @@
 #include <ESP8266WebServer.h>
 #else
 #include <WiFi.h>
+#include <esp_wifi.h>
 #endif
 
 #include "States.h"
@@ -20,6 +21,8 @@ class WifiClientStateMachine : public CRTPStateMachine<WifiClientStateMachine, W
 public:
   using CRTPStateMachine::state_t;
 
+  static constexpr state_t initial_state = state_t::DISCONNECTED;
+
   WifiClientStateMachine(Logger* logger, String hostname, String ssid, String password) : logger_(logger) {
     WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
@@ -29,8 +32,6 @@ public:
     WiFi.hostname(hostname);
     WiFi.begin(ssid, password);
   }
-
-  static constexpr state_t initial_state = state_t::DISCONNECTED;
 
   bool connected() {
     return state() == state_t::CONNECTED;

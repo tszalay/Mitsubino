@@ -103,6 +103,11 @@ private:
     PersistentData data(logger_);
     for (int i = 0; i < PersistentData::NumFields; i++)
       data.fields()[i] = server_.arg(PersistentData::FieldNames[i]);
+    if (data.my_hostname.length() > 16) {
+      logger_->println("Error: requested hostname ", data.my_hostname, " is longer than 16 characters!");
+      server_.send(200, "text/html", F("Error: requested parameters are not valid. See log for details."));
+      return;
+    }
     logger_->println("Received data from POST and saving to Flash:");
     data.print();
     data.save();

@@ -10,7 +10,8 @@
   FUN(mqtt_hostname) \
   FUN(mqtt_port) \
   FUN(mqtt_username) \
-  FUN(mqtt_password)
+  FUN(mqtt_password) \
+  FUN(role)
 
 struct PersistentData {
 #define MEMBER_HELPER(X) String X;
