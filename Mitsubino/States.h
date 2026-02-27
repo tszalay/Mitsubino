@@ -6,6 +6,8 @@
 #include <WiFi.h>
 #endif
 
+#include "Logger.h"
+
 struct SimpleTimer {
   const int interval;
   unsigned long last_tick{0};
@@ -20,17 +22,26 @@ struct SimpleTimer {
   }
   // can use this as a timeout instead of a timer
   bool peek() {
-    return millis() - last_tick >= interval;
+    return value() >= interval;
   }
   void reset() {
     last_tick = millis();
   }
+  unsigned long int value() const {
+    return millis() - last_tick;
+  }
 };
+
+struct CRTPBase {
+  static Logger* logger_;
+};
+Logger* CRTPBase::logger_ = nullptr;
 
 template <typename T, typename STATES>
 class CRTPStateMachine {
 public:
   using state_t = STATES;
+  static Logger* logger_;
 
 private:
   state_t state_;
@@ -63,6 +74,9 @@ public:
     state_ = new_state;
     time_in_state_ = 0;
     last_tick_ = millis();
+    if (CRTPBase::logger_) {
+      CRTPBase::logger_->println(T::name, " transitioning from ", (int)old_state, " to ", (int)new_state);
+    }
   }
 
   void loop() {

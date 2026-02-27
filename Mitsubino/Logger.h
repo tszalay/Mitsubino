@@ -2,6 +2,33 @@
 
 #include <Arduino.h>
 
+template <size_t N>
+struct FixedString {
+  std::array<char, N> data;
+
+  FixedString() : data{} {}
+
+  constexpr FixedString(std::string_view s) : data{} {
+    std::copy(s.begin(), s.begin() + std::min(s.size(), N-1), data.begin());
+  }
+
+  FixedString(const String& s) : data{} {
+    memcpy(data.begin(), s.begin(), std::min(s.length(), N-1));
+  }
+
+  FixedString& operator=(String s) {
+    memset(data.begin(), 0, sizeof(data));
+    memcpy(data.begin(), s.begin(), std::min(s.length(), N-1));
+    return *this;
+  }
+
+  operator String() const {
+    return String(data.begin(), N);
+  }
+
+  constexpr auto operator<=>(const FixedString&) const = default;
+};
+
 class Logger {
   String buffer_;
   const size_t capacity_;
@@ -17,6 +44,11 @@ class Logger {
     buffer_.concat(s);
     if (use_serial_)
       Serial.print(s);
+  }
+
+  template<size_t N>
+  void print_impl(const FixedString<N>& fs) {
+    print_impl(fs.data.begin());
   }
 
   template<typename T, typename... U>

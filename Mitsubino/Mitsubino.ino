@@ -5,7 +5,7 @@
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <DNSServer.h>
-#include <Adafruit_SHT4x.h> // 1.0.4
+#include <Adafruit_SHT4x.h>  // 1.0.4
 
 #include "Logger.h"
 #include "PersistentData.h"
@@ -34,7 +34,11 @@
 // the hostname of the relay or what? we can just hardcode it for now I guess, since
 // it's only temporary until we flip the heatpump control over too.
 
-Logger g_logger{2048};
+// other misc TODO:
+// really transition logger over to global Logger::get() and get rid of passing it around, that's silly
+// (or just make a Logger::println that is similarly templated but only if we have a logger)
+
+Logger g_logger{ 2048 };
 PersistentData g_persistent_data(&g_logger);
 
 WifiClientStateMachine* g_wifi = nullptr;
@@ -43,7 +47,7 @@ HTTPConfigServer* g_server = nullptr;
 ESPNOWStateMachine* g_espnow = nullptr;
 
 Adafruit_SHT4x sht4{};
-SimpleTimer g_temp_timer{15000};
+SimpleTimer g_temp_timer{ 15000 };
 
 void handle_mqtt_message(char* topic, byte* payload, unsigned int length) {
   /*if (String(topic) != get_topic_name("control")) {
@@ -96,13 +100,20 @@ struct RTCData {
   // whether we are going back to sleep or not after waking.
   // defaults to connecting to wifi after a reset, but the response packet
   // will tell us what to do.
-  bool sleepEnabled{false};
+  bool sleepEnabled;
   // the most recently used wifi channel to avoid needing to do a scan
-  int wifiChannel{1};
+  int wifiChannel;
   // count the number of wakeups since last reset
-  int numWakeups{0};
+  int numWakeups;
+
+  // no constructor so it doesn't automatically run on wake
+  void reset() {
+    sleepEnabled = false;
+    wifiChannel = 1;
+    numWakeups = 0;
+  }
 };
-RTC_DATA_ATTR RTCData g_rtcdata;
+RTC_NOINIT_ATTR RTCData g_rtcdata;
 
 enum class MitsubinoRole : int {
   Heatpump,
@@ -111,15 +122,23 @@ enum class MitsubinoRole : int {
   RemoteControl,
   Unknown
 };
-MitsubinoRole g_role{MitsubinoRole::Unknown};
+MitsubinoRole g_role{ MitsubinoRole::Unknown };
 
 void setup() {
+  WiFi.mode(WIFI_OFF);
   Serial.begin(115200);
+
+  g_logger.println("Starting setup");
+  CRTPBase::logger_ = &g_logger;
+
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  if (resetReason != ESP_RST_DEEPSLEEP) {
+    g_rtcdata.reset();
+  }
 
   if (!g_persistent_data.load()) {
     g_logger.println("Failed to fully load persistent data:");
-  }
-  else {
+  } else {
     g_logger.println("Loaded persistent data:");
   }
   g_persistent_data.print();
@@ -146,8 +165,12 @@ void setup() {
     Serial.print(g_logger.get());
   }
 
+
   // only temperature sensors and remotes allowed to sleep
   if (g_role != MitsubinoRole::TemperatureSensor && g_role != MitsubinoRole::RemoteControl) {
+    g_rtcdata.sleepEnabled = false;
+  }
+  if (g_rtcdata.numWakeups >= 5) {
     g_rtcdata.sleepEnabled = false;
   }
 
@@ -161,12 +184,12 @@ void setup() {
     g_server = new HTTPConfigServer(&g_logger, &g_persistent_data);
     ArduinoOTA.begin();
 
-    g_mqtt = new MQTTStateMachine(&g_logger, g_persistent_data.my_hostname, g_persistent_data.mqtt_hostname, g_persistent_data.mqtt_password, g_persistent_data.mqtt_port.toInt());
+    g_mqtt = new MQTTStateMachine(&g_logger, g_persistent_data.my_hostname, g_persistent_data.mqtt_hostname, g_persistent_data.mqtt_username, g_persistent_data.mqtt_password, g_persistent_data.mqtt_port.toInt());
   }
-
-  g_espnow = new ESPNOWStateMachine(&g_logger, g_persistent_data.my_hostname, !g_rtcdata.sleepEnabled);
+  g_espnow = new ESPNOWStateMachine(&g_logger, g_persistent_data.my_hostname, !g_rtcdata.sleepEnabled, g_rtcdata.wifiChannel);
 
   WIRE_TO_USE.setPins(SDA_TO_USE, SCL_TO_USE);
+  pinMode(BUTTON, INPUT);
 }
 
 
@@ -177,8 +200,7 @@ void read_sensor() {
   g_logger.println("Uptime: ", uptime, " days");
   if (!sht4.begin(&WIRE_TO_USE)) {
     g_logger.println("Couldn't find SHT4x");
-  }
-  else {
+  } else {
     sht4.setPrecision(SHT4X_HIGH_PRECISION);
     g_logger.println(F("SHT4x sensor connected and set to high precision"));
   }
@@ -189,7 +211,7 @@ void read_sensor() {
     g_logger.println("Failed to read temp sensor");
     return;
   }
-  
+
   {
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(2));
     msg["temperature"] = temp.temperature;
@@ -207,8 +229,7 @@ void read_sensor() {
     //  g_logger.println("sent reading: ", s);
     //}
   }
-  if (g_persistent_data.my_hostname == "remote_temp_1")
-  {
+  if (g_persistent_data.my_hostname == "remote_temp_1") {
     DynamicJsonDocument msg(JSON_OBJECT_SIZE(1));
     msg["remoteTemp"] = temp.temperature;
     String s;
@@ -221,10 +242,22 @@ void read_sensor() {
   }
 }
 
-SimpleTimer g_espnow_timer{5000};
+void disableInternalPower() {
+#if defined(NEOPIXEL_POWER)
+  pinMode(NEOPIXEL_POWER, OUTPUT);
+  digitalWrite(NEOPIXEL_POWER, LOW);
+#endif
+
+#if defined(NEOPIXEL_I2C_POWER)
+  pinMode(NEOPIXEL_I2C_POWER, OUTPUT);
+  digitalWrite(NEOPIXEL_I2C_POWER, LOW);
+#endif
+}
+
+SimpleTimer g_espnow_timer{ 5000 };
 
 void loop() {
-  if (g_espnow_timer.tick()) {
+  /*if (g_espnow_timer.tick()) {
     g_logger.println("Sending ESPNOW message");
     String msg = "Hello from ";
     msg += g_persistent_data.my_hostname;
@@ -233,7 +266,7 @@ void loop() {
     if (esp_now_send(ESP_NOW_BROADCAST_MAC, (const uint8_t*)msg.c_str(), msg.length()+1) != ESP_OK) {
       g_logger.println("esp_now_send failed!");
     }
-  }
+  }*/
   if (g_wifi) {
     g_wifi->loop();
   }
@@ -245,6 +278,53 @@ void loop() {
     g_mqtt->loop();
   }
   g_espnow->loop();
+  if (g_espnow->hasReceived()) {
+    auto msg = g_espnow->getReceived();
+    switch (g_role) {
+      case MitsubinoRole::Relay:
+        if (msg.type == ReceivedMessage::Type::Unicast) {
+          g_logger.println("Got unicast message from ", msg->sender, ": ", msg.body().c_str(), ", sending response");
+          MsgMQTTRelay response{};
+          response.sender = g_persistent_data.my_hostname;
+          response.recipient = msg->sender;
+          response.seqnum = msg->seqnum;
+          response.body = String("responding to hellow world");
+          const char* mstart = (const char*)&response;
+          g_espnow->sendResponse(String(mstart, sizeof(response)));
+        }
+        break;
+      case MitsubinoRole::TemperatureSensor:
+        if (msg.type == ReceivedMessage::Type::Response) {
+          g_logger.println("Got response in ", g_espnow_timer.value(), "ms from ", msg->sender, ": ", msg.body().c_str());
+        }
+        if (g_rtcdata.sleepEnabled) {
+          g_logger.println("Going to sleep");
+          g_rtcdata.numWakeups++;
+          g_rtcdata.wifiChannel = g_espnow->getChannel();
+          esp_sleep_enable_timer_wakeup(5000000);
+          disableInternalPower();
+          esp_deep_sleep_start();
+        }
+        break;
+    }
+  }
+  if (g_role == MitsubinoRole::TemperatureSensor && g_espnow->canSend()) {
+    if (!digitalRead(BUTTON)) {
+      g_rtcdata.sleepEnabled = true;
+      g_rtcdata.numWakeups = 0;
+      g_logger.println("Setting sleep mode enabled");
+    }
+    if (g_rtcdata.sleepEnabled || g_espnow_timer.tick()) {
+      MsgMQTTRelay msg{};
+      msg.sender = g_persistent_data.my_hostname;
+      msg.recipient = "hp_relay";
+      msg.seqnum = 11;
+      msg.body = String("greetings from temp sensor at ") + String(millis()) + String(" after attempts: ") + String(g_espnow->numAttempts());
+      const char* mstart = (const char*)&msg;
+      g_espnow->sendMessage(String(mstart, sizeof(msg)));
+      g_logger.println("Sent to relay");
+    }
+  }
 }
 
 #endif

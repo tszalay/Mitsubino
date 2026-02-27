@@ -21,6 +21,7 @@ class WifiClientStateMachine : public CRTPStateMachine<WifiClientStateMachine, W
 public:
   using CRTPStateMachine::state_t;
 
+  static constexpr const char* name = "Wifi";
   static constexpr state_t initial_state = state_t::DISCONNECTED;
 
   WifiClientStateMachine(Logger* logger, String hostname, String ssid, String password) : logger_(logger) {
